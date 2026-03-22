@@ -260,29 +260,30 @@ Page 3 (전체 TODO 관리)
 
 ---
 
-## Rules (.agents/rules/coding-standards.md 반영)
+## Rules
 
-1. 코드는 **Python + PySide6** 를 사용한다.
+1. 코드는 **Python + Dash (dash-bootstrap-components)** 를 사용한다.
 2. 코드 생성 후 반드시 실행하여 정상 동작 여부를 확인한다.
    - 에러 발생 시 원인 분석 → 수정 → 재실행을 반복한다.
    - 모든 에러가 해결된 후에만 작업을 종료한다.
 3. API 키는 반드시 `.env` 파일로 관리하며 Git에 커밋하지 않는다.
 4. 외부 API 호출(Gemini)은 반드시 `try-except`로 감싼다.
-5. 에러 발생 시 `QMessageBox.critical()`로 사용자에게 명확히 표시한다.
-6. QFont 사용 시 `pointSize() <= 0` 이면 반드시 `setPointSize(10)`을 먼저 호출한다.
-7. UI 스타일은 `pt` 단위 사용 (px 단위 사용 금지 - Qt DPI 스케일링 이슈).
+5. 에러 발생 시 `dbc.Toast` 또는 `dbc.Alert`으로 사용자에게 명확히 표시한다.
+6. 상태 관리는 `dcc.Store`를 사용한다. Todo는 `storage_type='local'`로 브라우저에 유지.
+7. 긴 작업(AI 분석)은 반드시 `background=True` callback + `DiskcacheManager`로 처리한다.
 
 ## Workflow (.agents/workflows/python-dev.md 반영)
 
 ### 환경 설정
 ```bash
 pip install -r requirements.txt
-copy .env.example .env   # API 키 입력
+copy .env.example .env   # API 키 입력 (선택)
 ```
 
 ### 실행
 ```bash
-python main.py
+python app.py
+# 브라우저에서 http://localhost:8050 접속
 ```
 
 ### 기능 테스트 체크리스트
