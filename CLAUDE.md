@@ -4,15 +4,15 @@
 Outlook 이메일을 날짜별로 조회하고, Gemini AI로 요약 및 To-Do를 자동 추출하는 데스크탑 앱.
 
 ## 기술 스택
-- **UI**: PySide6 (Qt)
+- **UI**: Dash + Bootstrap (dash, dash-bootstrap-components)
 - **이메일 연동**: pywin32 (Outlook COM)
 - **AI**: Google Gemini API (google-genai)
 - **Python**: 3.9+
 
 ## 파일 구조
 ```
-main.py              # 진입점 - QApplication 생성 및 MainWindow 실행
-main_window.py       # UI 전체 (MainWindow, 각종 Dialog, Thread 클래스)
+app.py               # 진입점 + 전체 UI (Dash 레이아웃 및 콜백)
+assets/style.css     # 커스텀 CSS 스타일
 outlook_manager.py   # Outlook COM 연동 (이메일 조회)
 ai_processor.py      # Gemini API 호출 및 응답 파싱
 .env                 # API 키 관리 (Git 제외)

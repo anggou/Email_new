@@ -1,0 +1,67 @@
+body {
+    background-color: #f0f2f5;
+    font-family: 'Segoe UI', sans-serif;
+}
+
+.email-list {
+    height: 320px;
+    overflow-y: auto;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    background: #fff;
+}
+
+.email-item {
+    padding: 8px 10px;
+    border-bottom: 1px solid #f0f0f0;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.email-item:hover {
+    background-color: #e9ecef;
+}
+
+.email-item.selected {
+    background-color: #e3f2fd;
+}
+
+.email-viewer {
+    height: 160px;
+    overflow-y: auto;
+    background: #fafafa;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 10px;
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.todo-list-container {
+    height: 340px;
+    overflow-y: auto;
+}
+
+.todo-item {
+    font-size: 0.88rem;
+}
+
+.priority-high { color: #D32F2F; font-weight: 600; }
+.priority-mid  { color: #E65100; font-weight: 600; }
+.priority-low  { color: #1565C0; font-weight: 600; }
+.status-completed { text-decoration: line-through; color: #888; }
+.status-deleted { color: #bbb; }
+.status-forwarded { color: #7B1FA2; }
+
+.page-header {
+    background: #fff;
+    border-bottom: 1px solid #dee2e6;
+    padding: 8px 16px;
+    margin-bottom: 12px;
+}
+
+.card-clean {
+    border: none;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
