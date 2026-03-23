@@ -66,7 +66,7 @@ todos는 문자열의 리스트 형태로 제공해줘.
         try:
             try:
                 response = self.client.models.generate_content(
-                    model='gemini-3.1-flash',
+                    model='gemini-2.0-flash',
                     contents=prompt
                 )
             except Exception as e:
@@ -97,6 +97,6 @@ todos는 문자열의 리스트 형태로 제공해줘.
             self.logger.error(f"JSON 파싱 오류: {e}\n원본 응답: {response_text}")
             raise Exception("AI 응답을 JSON 형식으로 파싱할 수 없습니다. 응답 형태가 올바르지 않습니다.")
         except Exception as e:
-            # 상세한 에러 메시지를 노출하여 무슨 문제인지 파악하기 쉽게 함
             self.logger.error(f"Gemini API 호출 중 오류 발생: {e}")
+            print(f"[AIProcessor ERROR] {e}")
             raise Exception(f"{e}")

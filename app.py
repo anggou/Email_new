@@ -62,6 +62,25 @@ def build_user_context(profile):
 def split_comma(s):
     return [x.strip() for x in s.split(",") if x.strip()] if s else []
 
+def _pf_list_widget(field, label, placeholder):
+    """프로필 항목 추가/삭제 위젯"""
+    return html.Div([
+        dbc.Label(label, className="small fw-semibold"),
+        html.Div(
+            id=f"pf-list-{field}",
+            className="border rounded p-1 mb-1 bg-white",
+            style={"minHeight": "34px", "maxHeight": "90px", "overflowY": "auto"},
+        ),
+        dbc.InputGroup([
+            dbc.Input(
+                id={"type": "pf-input", "field": field},
+                placeholder=placeholder, size="sm",
+            ),
+            dbc.Button("+ 추가", id={"type": "pf-add-btn", "field": field},
+                       color="primary", outline=True, size="sm"),
+        ], className="mb-2"),
+    ])
+
 # ── Page layouts ──────────────────────────────────────────────────────────────
 def page1_layout():
     return dbc.Container([
@@ -76,11 +95,27 @@ def page1_layout():
                         dbc.Label("이메일 계정", className="fw-semibold"),
                         dcc.Dropdown(id="account-dropdown", placeholder="계정 선택…", className="mb-3"),
 
-                        dbc.Label("Gemini API 키", className="fw-semibold"),
+                        dbc.Label([
+                            "Gemini API 키",
+                            html.A(" (키 발급/관리)", href="https://aistudio.google.com/apikey",
+                                   target="_blank", className="ms-1 small text-primary"),
+                        ], className="fw-semibold"),
                         dbc.InputGroup([
                             dbc.Input(id="api-key-input", type="password", placeholder="API 키 입력…"),
                             dbc.Button("표시", id="btn-toggle-api-key", color="secondary", outline=True, size="sm"),
                         ], className="mb-3"),
+
+                        dbc.Label([
+                            "Notion API 키",
+                            html.A(" (키 발급/관리)", href="https://www.notion.so/my-integrations",
+                                   target="_blank", className="ms-1 small text-primary"),
+                        ], className="fw-semibold"),
+                        dbc.InputGroup([
+                            dbc.Input(id="notion-key-input", type="password", placeholder="secret_xxxxxx"),
+                            dbc.Button("표시", id="btn-toggle-notion-key", color="secondary", outline=True, size="sm"),
+                        ], className="mb-1"),
+                        dbc.Input(id="notion-db-input", placeholder="Notion 페이지 URL (DB가 생성될 위치)",
+                                  size="sm", className="mb-3"),
 
                         dbc.Button("내 정보 입력 ▾", id="btn-toggle-profile",
                                    color="secondary", outline=True, size="sm",
@@ -97,21 +132,11 @@ def page1_layout():
                                 dbc.Label("역할 / 직책", className="small fw-semibold"),
                                 dbc.Textarea(id="profile-role", placeholder="예) 선박 AI 엔지니어", rows=2,
                                              className="mb-2", style={"fontSize": "0.85rem"}),
-                                dbc.Label("참여 프로젝트 (쉼표 구분)", className="small fw-semibold"),
-                                dbc.Input(id="profile-projects", placeholder="프로젝트A, 프로젝트B",
-                                          size="sm", className="mb-2"),
-                                dbc.Label("상사 (쉼표 구분)", className="small fw-semibold"),
-                                dbc.Input(id="profile-superiors", placeholder="Guhai, Donghan Wu",
-                                          size="sm", className="mb-2"),
-                                dbc.Label("동료 (쉼표 구분)", className="small fw-semibold"),
-                                dbc.Input(id="profile-peers", placeholder="Alice, Bob",
-                                          size="sm", className="mb-2"),
-                                dbc.Label("부하직원 (쉼표 구분)", className="small fw-semibold"),
-                                dbc.Input(id="profile-subordinates", placeholder="Charlie",
-                                          size="sm", className="mb-2"),
-                                dbc.Label("주요 고객/외부인 (쉼표 구분)", className="small fw-semibold"),
-                                dbc.Input(id="profile-clients", placeholder="Client Corp",
-                                          size="sm", className="mb-2"),
+                                _pf_list_widget("projects", "참여 프로젝트", "프로젝트명 입력 후 추가"),
+                                _pf_list_widget("superiors", "상사", "이름 입력 후 추가"),
+                                _pf_list_widget("peers", "동료", "이름 입력 후 추가"),
+                                _pf_list_widget("subordinates", "부하직원", "이름 입력 후 추가"),
+                                _pf_list_widget("clients", "주요 고객/외부인", "이름 입력 후 추가"),
                                 dbc.Button("저장", id="btn-save-profile", color="success",
                                            size="sm", className="me-2"),
                                 html.Span(id="profile-save-status", className="text-success small"),
@@ -249,7 +274,8 @@ def page2_layout():
             is_open=False,
             dismissable=True,
             duration=3000,
-            style={"position": "fixed", "bottom": 16, "right": 16, "zIndex": 9999},
+            style={"position": "fixed", "bottom": 16, "left": 16, "zIndex": 9999,
+                   "maxWidth": "500px", "whiteSpace": "pre-wrap"},
         ),
     ])
 
@@ -311,7 +337,13 @@ def page3_layout():
                                         dbc.Button("삭제", id="p3-btn-delete", size="sm",
                                                    color="danger", outline=True, className="me-1"),
                                         dbc.Button("편집", id="p3-btn-edit", size="sm",
-                                                   color="primary", outline=True),
+                                                   color="primary", outline=True, className="me-1"),
+                                        dbc.Button("Notion 동기화", id="p3-btn-notion-sync", size="sm",
+                                                   style={"backgroundColor": "#000", "borderColor": "#000",
+                                                          "color": "white"}, className="me-1"),
+                                        html.Span(id="p3-notion-sync-status",
+                                                  className="text-muted small align-self-center",
+                                                  style={"fontSize": "0.75rem"}),
                                     ], className="ms-auto", width="auto"),
                                 ], align="center", className="mb-2 g-1"),
                                 html.Div(id="p3-active-list", className="todo-list-container"),
@@ -393,7 +425,7 @@ def page3_layout():
             is_open=False,
             dismissable=True,
             duration=3000,
-            style={"position": "fixed", "bottom": 16, "right": 16, "zIndex": 9999},
+            style={"position": "fixed", "bottom": 16, "left": 16, "zIndex": 9999},
         ),
     ])
 
@@ -414,6 +446,11 @@ app.layout = html.Div([
     dcc.Store(id="store-todo-checked-p3-completed", data=[]),
     dcc.Store(id="store-todo-checked-p3-trash", data=[]),
     dcc.Store(id="store-analyze-done", data=0),
+    dcc.Store(id="store-profile-lists", data={"projects":[],"superiors":[],"peers":[],"subordinates":[],"clients":[]}),
+    dcc.Store(id="store-notion-key", data=""),
+    dcc.Store(id="store-notion-db", data=""),
+    dcc.Store(id="store-notion-db-id", data=""),
+    dcc.Interval(id="notion-poll-interval", interval=5*60*1000, n_intervals=0, disabled=True),
 
     # Pages
     html.Div(id="page1-container", children=page1_layout()),
@@ -463,6 +500,33 @@ def load_accounts(page):
         return [{"label": f"오류: {e}", "value": ""}], ""
 
 
+# ── Page 1: Toggle API key visibility ────────────────────────────────────────
+@app.callback(
+    Output("api-key-input", "type"),
+    Output("btn-toggle-api-key", "children"),
+    Input("btn-toggle-api-key", "n_clicks"),
+    State("api-key-input", "type"),
+    prevent_initial_call=True,
+)
+def toggle_api_key_visibility(n, current_type):
+    if current_type == "password":
+        return "text", "숨기기"
+    return "password", "표시"
+
+
+@app.callback(
+    Output("notion-key-input", "type"),
+    Output("btn-toggle-notion-key", "children"),
+    Input("btn-toggle-notion-key", "n_clicks"),
+    State("notion-key-input", "type"),
+    prevent_initial_call=True,
+)
+def toggle_notion_key_visibility(n, current_type):
+    if current_type == "password":
+        return "text", "숨기기"
+    return "password", "표시"
+
+
 # ── Page 1: Toggle profile collapse ───────────────────────────────────────────
 @app.callback(
     Output("profile-collapse", "is_open"),
@@ -479,11 +543,7 @@ def toggle_profile(n, is_open):
     Output("profile-email", "value"),
     Output("profile-name", "value"),
     Output("profile-role", "value"),
-    Output("profile-projects", "value"),
-    Output("profile-superiors", "value"),
-    Output("profile-peers", "value"),
-    Output("profile-subordinates", "value"),
-    Output("profile-clients", "value"),
+    Output("store-profile-lists", "data"),
     Input("account-dropdown", "value"),
     prevent_initial_call=True,
 )
@@ -494,11 +554,13 @@ def load_profile(account):
         account or "",
         p.get("name", ""),
         p.get("role", ""),
-        ", ".join(p.get("projects", [])),
-        ", ".join(p.get("superiors", [])),
-        ", ".join(p.get("peers", [])),
-        ", ".join(p.get("subordinates", [])),
-        ", ".join(p.get("clients", [])),
+        {
+            "projects":     p.get("projects", []),
+            "superiors":    p.get("superiors", []),
+            "peers":        p.get("peers", []),
+            "subordinates": p.get("subordinates", []),
+            "clients":      p.get("clients", []),
+        },
     )
 
 
@@ -509,29 +571,119 @@ def load_profile(account):
     State("account-dropdown", "value"),
     State("profile-name", "value"),
     State("profile-role", "value"),
-    State("profile-projects", "value"),
-    State("profile-superiors", "value"),
-    State("profile-peers", "value"),
-    State("profile-subordinates", "value"),
-    State("profile-clients", "value"),
+    State("store-profile-lists", "data"),
     prevent_initial_call=True,
 )
-def save_profile(n, account, name, role, projects, superiors, peers, subordinates, clients):
+def save_profile(n, account, name, role, lists_data):
     if not account:
         return "계정을 먼저 선택하세요."
+    lists_data = lists_data or {}
     profiles = load_all_profiles()
     profiles[account] = {
         "name": name or "",
         "email": account,
         "role": role or "",
-        "projects": split_comma(projects),
-        "superiors": split_comma(superiors),
-        "peers": split_comma(peers),
-        "subordinates": split_comma(subordinates),
-        "clients": split_comma(clients),
+        "projects":     lists_data.get("projects", []),
+        "superiors":    lists_data.get("superiors", []),
+        "peers":        lists_data.get("peers", []),
+        "subordinates": lists_data.get("subordinates", []),
+        "clients":      lists_data.get("clients", []),
     }
     save_all_profiles(profiles)
     return "저장됨 ✓"
+
+
+# ── Page 1: Profile list add / delete / render ───────────────────────────────
+_PF_FIELDS = ["projects", "superiors", "peers", "subordinates", "clients"]
+
+@app.callback(
+    Output("store-profile-lists", "data", allow_duplicate=True),
+    Output({"type": "pf-input", "field": ALL}, "value"),
+    Input({"type": "pf-add-btn", "field": ALL}, "n_clicks"),
+    Input({"type": "pf-input", "field": ALL}, "n_submit"),
+    State({"type": "pf-input", "field": ALL}, "value"),
+    State("store-profile-lists", "data"),
+    prevent_initial_call=True,
+)
+def add_profile_item(n_clicks_list, n_submit_list, input_values, lists_data):
+    triggered = ctx.triggered_id
+    if not triggered:
+        return no_update, no_update
+    field = triggered.get("field") if isinstance(triggered, dict) else None
+    if not field or field not in _PF_FIELDS:
+        return no_update, no_update
+    field_idx = _PF_FIELDS.index(field)
+    value = (input_values or [None] * len(_PF_FIELDS))[field_idx]
+    if not value or not value.strip():
+        return no_update, no_update
+    lists_data = dict(lists_data or {f: [] for f in _PF_FIELDS})
+    current = list(lists_data.get(field, []))
+    if value.strip() not in current:
+        current.append(value.strip())
+    lists_data[field] = current
+    new_inputs = list(input_values or [""] * len(_PF_FIELDS))
+    new_inputs[field_idx] = ""
+    return lists_data, new_inputs
+
+
+@app.callback(
+    Output("store-profile-lists", "data", allow_duplicate=True),
+    Input({"type": "pf-del", "field": ALL, "index": ALL}, "n_clicks"),
+    State("store-profile-lists", "data"),
+    prevent_initial_call=True,
+)
+def delete_profile_item(n_clicks_list, lists_data):
+    triggered = ctx.triggered_id
+    if not triggered or not isinstance(triggered, dict):
+        return no_update
+    if not any(n for n in n_clicks_list if n):
+        return no_update
+    field = triggered.get("field")
+    index = triggered.get("index")
+    if field not in _PF_FIELDS:
+        return no_update
+    lists_data = dict(lists_data or {f: [] for f in _PF_FIELDS})
+    current = list(lists_data.get(field, []))
+    if 0 <= index < len(current):
+        current.pop(index)
+    lists_data[field] = current
+    return lists_data
+
+
+def _render_pf_list(field, items):
+    if not items:
+        return html.Span("항목 없음", className="text-muted", style={"fontSize": "0.75rem"})
+    return [
+        html.Span([
+            dbc.Badge(item, color="secondary", className="fw-normal me-1",
+                      style={"fontSize": "0.78rem"}),
+            html.Span("×", id={"type": "pf-del", "field": field, "index": i},
+                      n_clicks=0,
+                      style={"cursor": "pointer", "color": "#999", "fontSize": "0.85rem",
+                             "marginRight": "6px", "userSelect": "none"},
+                      className="pf-del-x"),
+        ], className="d-inline-flex align-items-center mb-1")
+        for i, item in enumerate(items)
+    ]
+
+
+@app.callback(
+    Output("pf-list-projects", "children"),
+    Output("pf-list-superiors", "children"),
+    Output("pf-list-peers", "children"),
+    Output("pf-list-subordinates", "children"),
+    Output("pf-list-clients", "children"),
+    Input("store-profile-lists", "data"),
+)
+def render_profile_lists(data):
+    data = data or {f: [] for f in _PF_FIELDS}
+    return (
+        _render_pf_list("projects",     data.get("projects", [])),
+        _render_pf_list("superiors",    data.get("superiors", [])),
+        _render_pf_list("peers",        data.get("peers", [])),
+        _render_pf_list("subordinates", data.get("subordinates", [])),
+        _render_pf_list("clients",      data.get("clients", [])),
+    )
 
 
 # ── Page 1: Go to Page 2 ──────────────────────────────────────────────────────
@@ -540,20 +692,24 @@ def save_profile(n, account, name, role, projects, superiors, peers, subordinate
     Output("store-account", "data"),
     Output("store-api-key", "data"),
     Output("store-user-profile", "data"),
+    Output("store-notion-key", "data"),
+    Output("store-notion-db", "data"),
     Output("page1-error", "children"),
     Input("btn-next-page2", "n_clicks"),
     State("account-dropdown", "value"),
     State("api-key-input", "value"),
+    State("notion-key-input", "value"),
+    State("notion-db-input", "value"),
     prevent_initial_call=True,
 )
-def go_to_page2(n, account, api_key):
+def go_to_page2(n, account, api_key, notion_key, notion_db):
     if not account:
-        return no_update, no_update, no_update, no_update, "계정을 선택해주세요."
+        return no_update, no_update, no_update, no_update, no_update, no_update, "계정을 선택해주세요."
     if not api_key or api_key.strip() == "":
-        return no_update, no_update, no_update, no_update, "Gemini API 키를 입력해주세요."
+        return no_update, no_update, no_update, no_update, no_update, no_update, "Gemini API 키를 입력해주세요."
     profiles = load_all_profiles()
     profile = profiles.get(account, {})
-    return 2, account, api_key.strip(), profile, ""
+    return 2, account, api_key.strip(), profile, (notion_key or "").strip(), (notion_db or "").strip(), ""
 
 
 # ── Page 2: Update account info label ────────────────────────────────────────
@@ -723,6 +879,7 @@ def analyze_emails(set_progress, n_clicks, checked_indices, emails, user_profile
     user_context = build_user_context(user_profile) if user_profile else ""
     total = len(checked_indices)
 
+    errors = []
     for i, idx in enumerate(checked_indices):
         if idx >= len(emails):
             continue
@@ -738,6 +895,10 @@ def analyze_emails(set_progress, n_clicks, checked_indices, emails, user_profile
                 cc_recipients=email.get("cc_recipients", ""),
             )
         except Exception as e:
+            err_detail = f"[{email.get('subject','?')[:20]}] {e}"
+            errors.append(err_detail)
+            with open("error_log.txt", "a", encoding="utf-8") as f:
+                f.write(err_detail + "\n")
             continue
 
         summary = result.get("summary", "")
@@ -768,6 +929,10 @@ def analyze_emails(set_progress, n_clicks, checked_indices, emails, user_profile
             })
 
     set_progress((f"완료! {len(checked_indices)}개 분석됨", 100))
+    if errors:
+        all_errors = "\n".join(errors)
+        err_msg = f"오류 {len(errors)}건 발생:\n{all_errors}"
+        return results, (done_count or 0) + 1, err_msg, True
     return results, (done_count or 0) + 1, f"분석 완료: {total}개 이메일", True
 
 
@@ -1053,6 +1218,104 @@ def update_p3_completed_checked(values, todos, filter_val, sort_val):
 def update_p3_trash_checked(values, todos, filter_val, sort_val):
     items = _get_filtered_sorted(todos or [], filter_val, sort_val, ["deleted"])
     return [items[i][0] for i, v in enumerate(values) if v and i < len(items)]
+
+
+# ── Page 3: Notion sync ───────────────────────────────────────────────────────
+@app.callback(
+    Output("p3-toast", "children", allow_duplicate=True),
+    Output("p3-toast", "is_open", allow_duplicate=True),
+    Output("store-todos", "data", allow_duplicate=True),
+    Output("store-notion-db-id", "data"),
+    Output("notion-poll-interval", "disabled"),
+    Output("p3-notion-sync-status", "children"),
+    Input("p3-btn-notion-sync", "n_clicks"),
+    State("store-todos", "data"),
+    State("store-todo-checked-p3-active", "data"),
+    State("store-notion-key", "data"),
+    State("store-notion-db", "data"),
+    prevent_initial_call=True,
+)
+def sync_to_notion(n, todos, checked, notion_key, notion_db):
+    no_change = (no_update, no_update, no_update, no_update, no_update, no_update)
+    if not notion_key:
+        return "Notion API 키가 없습니다. Page 1에서 입력 후 다시 시작해주세요.", True, *no_change[2:]
+    if not notion_db:
+        return "Notion 페이지 URL이 없습니다. Page 1에서 입력 후 다시 시작해주세요.", True, *no_change[2:]
+
+    todos = todos or []
+    if checked:
+        target = [todos[i] for i in checked if i < len(todos)]
+    else:
+        target = [t for t in todos if t.get("status") == "active" and t.get("forwarded")]
+
+    if not target:
+        return "동기화할 항목이 없습니다.", True, no_update, no_update, no_update, no_update
+
+    try:
+        from notion_sync import NotionSync
+        syncer = NotionSync(api_key=notion_key, parent_page_id=notion_db)
+        success, failed, id_map, db_id = syncer.sync_all_todos(target)
+
+        # todo에 notion_page_id 저장
+        updated_todos = list(todos)
+        for todo in updated_todos:
+            if todo.get("id") in id_map:
+                todo["notion_page_id"] = id_map[todo["id"]]
+
+        now = datetime.now().strftime("%H:%M")
+        if failed:
+            return f"Notion 동기화 실패: {failed[0]}", True, no_update, no_update, no_update, no_update
+
+        return (f"Notion 동기화 완료: {success}건 저장됨", True,
+                updated_todos, db_id, False, f"Notion 연동 중 · 마지막 동기화: {now}")
+    except Exception as e:
+        return f"Notion 오류: {e}", True, no_update, no_update, no_update, no_update
+
+
+# ── Page 3: Notion polling ────────────────────────────────────────────────────
+@app.callback(
+    Output("store-todos", "data", allow_duplicate=True),
+    Output("p3-notion-sync-status", "children", allow_duplicate=True),
+    Input("notion-poll-interval", "n_intervals"),
+    State("store-todos", "data"),
+    State("store-notion-key", "data"),
+    State("store-notion-db", "data"),
+    State("store-notion-db-id", "data"),
+    prevent_initial_call=True,
+)
+def poll_notion_status(n_intervals, todos, notion_key, notion_db, db_id):
+    if not notion_key or not notion_db or not db_id:
+        return no_update, no_update
+
+    todos = todos or []
+    # notion_page_id가 있는 항목만 추출
+    notion_id_to_todo_id = {
+        t["notion_page_id"]: t["id"]
+        for t in todos if t.get("notion_page_id")
+    }
+    if not notion_id_to_todo_id:
+        return no_update, no_update
+
+    try:
+        from notion_sync import NotionSync
+        syncer = NotionSync(api_key=notion_key, parent_page_id=notion_db)
+        syncer._db_id = db_id
+        changes = syncer.fetch_status_changes(db_id, notion_id_to_todo_id)
+
+        if not changes:
+            now = datetime.now().strftime("%H:%M")
+            return no_update, f"Notion 연동 중 · 마지막 확인: {now}"
+
+        updated_todos = list(todos)
+        for todo in updated_todos:
+            if todo.get("id") in changes:
+                todo["status"] = changes[todo["id"]]
+
+        now = datetime.now().strftime("%H:%M")
+        return updated_todos, f"Notion 연동 중 · 마지막 확인: {now}"
+    except Exception as e:
+        logger.error(f"Notion 폴링 오류: {e}")
+        return no_update, no_update
 
 
 # ── Page 3: Todo actions ──────────────────────────────────────────────────────

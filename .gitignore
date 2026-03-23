@@ -1,5 +1,6 @@
 .env
 user_profile.json
+error_log.txt
 __pycache__/
 *.pyc
 cache/
