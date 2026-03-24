@@ -57,6 +57,22 @@ class NotionSync:
         url = f"https://api.notion.com/v1/pages/{page_id}"
         self._req("PATCH", url, json={"properties": {"상태": {"select": {"name": new_status}}}})
 
+    def archive_page(self, page_id: str):
+        """Notion 페이지를 아카이브(삭제)합니다."""
+        url = f"https://api.notion.com/v1/pages/{page_id}"
+        self._req("PATCH", url, json={"archived": True})
+
+    def archive_pages(self, page_ids: list) -> list:
+        """여러 Notion 페이지를 아카이브합니다. 실패 메시지 목록 반환."""
+        errors = []
+        for page_id in page_ids:
+            try:
+                self.archive_page(page_id)
+            except Exception as e:
+                logger.warning(f"Notion 페이지 아카이브 실패 ({page_id}): {e}")
+                errors.append(str(e))
+        return errors
+
     def _truncate(self, text, limit: int = MAX_TEXT_LENGTH) -> str:
         if not text:
             return ""
@@ -158,26 +174,41 @@ class NotionSync:
 
     def fetch_status_changes(self, db_id: str, notion_id_to_todo_id: dict) -> dict:
         """
-        Notion DB를 조회하여 앱 상태와 다른 항목만 반환.
+        Notion DB를 조회하여 상태 변경 및 삭제(아카이브) 항목을 반환.
         notion_id_to_todo_id: {notion_page_id: todo_app_id}
-        반환: {todo_app_id: new_app_status}
+        반환: {todo_app_id: new_app_status}  (삭제된 경우 "deleted")
         """
         changes = {}
         try:
-            data = self._req(
-                "POST",
-                f"https://api.notion.com/v1/databases/{db_id}/query",
-                json={},
-            )
-            for page in data.get("results", []):
-                page_id = page["id"].replace("-", "")
-                if page_id not in notion_id_to_todo_id:
-                    continue
-                select = (page.get("properties", {}).get("상태", {}).get("select")) or {}
-                status_name = select.get("name", "active").lower()
-                app_status = STATUS_MAP.get(status_name, "active")
-                todo_id = notion_id_to_todo_id[page_id]
-                changes[todo_id] = app_status
+            seen_ids = set()
+            cursor = None
+            while True:
+                body = {"page_size": 100}
+                if cursor:
+                    body["start_cursor"] = cursor
+                data = self._req(
+                    "POST",
+                    f"https://api.notion.com/v1/databases/{db_id}/query",
+                    json=body,
+                )
+                for page in data.get("results", []):
+                    page_id = page["id"].replace("-", "")
+                    seen_ids.add(page_id)
+                    if page_id not in notion_id_to_todo_id:
+                        continue
+                    select = (page.get("properties", {}).get("상태", {}).get("select")) or {}
+                    status_name = select.get("name", "active").lower()
+                    app_status = STATUS_MAP.get(status_name, "active")
+                    todo_id = notion_id_to_todo_id[page_id]
+                    changes[todo_id] = app_status
+                if not data.get("has_more"):
+                    break
+                cursor = data.get("next_cursor")
+
+            # Notion에서 아카이브/삭제된 항목 감지
+            for notion_id, todo_id in notion_id_to_todo_id.items():
+                if notion_id not in seen_ids:
+                    changes[todo_id] = "deleted"
         except Exception as e:
             logger.warning(f"Notion 상태 조회 실패: {e}")
         return changes

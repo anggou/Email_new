@@ -1,5 +1,5 @@
 import dash
-from dash import dcc, html, Input, Output, State, ALL, ctx, no_update, callback
+from dash import dcc, html, Input, Output, State, ALL, MATCH, ctx, no_update, callback
 import dash_bootstrap_components as dbc
 import diskcache
 import json
@@ -207,7 +207,7 @@ def page1_layout():
                                 ], className="mb-2"),
                                 dbc.Label("역할 / 직책", className="small fw-semibold"),
                                 dbc.Textarea(id="profile-role", placeholder="예) 선박 AI 엔지니어", rows=2,
-                                             className="mb-2", style={"fontSize": "0.85rem"}),
+                                             className="mb-2", style={"fontSize": "var(--fs-body)"}),
                                 _pf_list_widget("projects", "참여 프로젝트", "프로젝트명 입력 후 추가"),
                                 _pf_list_widget("superiors", "상사", "이름 입력 후 추가"),
                                 _pf_list_widget("peers", "동료", "이름 입력 후 추가"),
@@ -226,7 +226,7 @@ def page1_layout():
                 ], className="card-clean mt-4"),
                 html.Div("[ Page 1 — 계정 선택 / API 키 / 프로필 입력 ]",
                          className="text-center text-muted mt-2",
-                         style={"fontSize": "0.72rem", "opacity": "0.5"}),
+                         style={"fontSize": "var(--fs-xs)", "opacity": "0.5"}),
             ], md={"size": 6, "offset": 3}, lg={"size": 4, "offset": 4}),
         ]),
     ], fluid=True, className="py-4")
@@ -274,7 +274,8 @@ def page2_layout():
                             dbc.Row([
                                 dbc.Col(html.Span("메일 목록", className="fw-semibold small"), width="auto"),
                                 dbc.Col(
-                                    dbc.Checkbox(id="email-select-all-cb", label="전체선택",
+                                    dbc.Checkbox(id="email-select-all-cb",
+                                                  label=html.Span(["전체선택", html.Span(id="email-select-count", className="text-muted ms-1")]),
                                                   label_class_name="small ms-1"),
                                     className="ms-auto", width="auto"),
                             ], align="center"),
@@ -299,36 +300,55 @@ def page2_layout():
                 # Right: Todo tabs
                 dbc.Col([
                     dbc.Card([
-                        dbc.CardHeader([
-                            dbc.Row([
-                                dbc.Col(html.Span("To-Do", className="fw-semibold small"), width="auto"),
-                                dbc.Col([
-                                    dbc.Button("전체선택", id="btn-todo-select-all", size="sm",
-                                               color="secondary", outline=True, className="me-1"),
-                                    dbc.Button("완료", id="btn-todo-complete", size="sm",
-                                               color="success", outline=True, className="me-1"),
-                                    dbc.Button("삭제", id="btn-todo-delete", size="sm",
-                                               color="danger", outline=True, className="me-1"),
-                                    dbc.Button("전체 TODO로", id="btn-todo-forward", size="sm",
-                                               outline=True,
-                                               style={"borderColor": "#7B1FA2", "color": "#7B1FA2"}),
-                                ], className="ms-auto", width="auto"),
-                            ], align="center"),
-                        ]),
                         dbc.CardBody([
                             dbc.Tabs([
                                 dbc.Tab(
-                                    html.Div(id="todo-list-active",
-                                             className="todo-list-container"),
-                                    label="할 일", tab_id="tab-active",
+                                    html.Div([
+                                        dbc.Row([
+                                            dbc.Col(
+                                                dbc.Checkbox(id="todo-active-select-all",
+                                                             label=html.Span(["전체선택", html.Span(id="p2-active-select-count", className="text-muted ms-1")]),
+                                                             label_class_name="small ms-1",
+                                                             value=False),
+                                                width="auto",
+                                            ),
+                                            dbc.Col([
+                                                dbc.Button("삭제", id="btn-todo-delete", size="sm",
+                                                           color="danger", outline=True, className="me-1"),
+                                                dbc.Button("전체 TODO로 전달", id="btn-todo-forward",
+                                                           size="sm",
+                                                           style={"backgroundColor": "#7B1FA2",
+                                                                  "borderColor": "#7B1FA2",
+                                                                  "color": "#fff"}),
+                                            ], className="ms-auto", width="auto"),
+                                        ], align="center", className="mb-2 g-1"),
+                                        html.Div(id="todo-list-active", className="todo-list-container"),
+                                    ]),
+                                    label="임시 TO-DO", tab_id="tab-active",
                                 ),
                                 dbc.Tab(
-                                    html.Div(id="todo-list-trash",
-                                             className="todo-list-container"),
+                                    html.Div([
+                                        dbc.Row([
+                                            dbc.Col(
+                                                dbc.Checkbox(id="todo-trash-select-all",
+                                                             label=html.Span(["전체선택", html.Span(id="p2-trash-select-count", className="text-muted ms-1")]),
+                                                             label_class_name="small ms-1",
+                                                             value=False),
+                                                width="auto",
+                                            ),
+                                            dbc.Col([
+                                                dbc.Button("복구", id="btn-todo-restore", size="sm",
+                                                           color="secondary", outline=True, className="me-1"),
+                                                dbc.Button("영구삭제", id="btn-todo-perm-delete", size="sm",
+                                                           color="danger", outline=True),
+                                            ], className="ms-auto", width="auto"),
+                                        ], align="center", className="mb-2 g-1"),
+                                        html.Div(id="todo-list-trash", className="todo-list-container"),
+                                    ]),
                                     label="휴지통", tab_id="tab-trash",
                                 ),
                             ], id="todo-tabs", active_tab="tab-active"),
-                        ], className="p-0 pt-1"),
+                        ], className="p-2"),
                     ], className="card-clean"),
                 ], md=7),
             ]),
@@ -336,18 +356,25 @@ def page2_layout():
 
         # ── Analyze modal ────────────────────────────────────────────────────
         dbc.Modal([
-            dbc.ModalHeader(dbc.ModalTitle("AI 분석 중…")),
+            dbc.ModalHeader(dbc.ModalTitle(html.Span(id="analyze-modal-title", children="AI 분석 중…"))),
             dbc.ModalBody([
-                dbc.Progress(id="analyze-progress-bar", value=0, striped=True, animated=True,
-                             className="mb-3"),
-                html.P(id="analyze-progress-text", className="text-center text-muted small"),
-                dbc.Button("취소", id="btn-analyze-cancel", color="danger", outline=True,
-                           size="sm", className="d-block mx-auto"),
+                html.Div(id="analyze-progress-wrap", children=[
+                    dbc.Progress(id="analyze-progress-bar", value=0, striped=True, animated=True,
+                                 className="mb-3"),
+                    html.P(id="analyze-progress-text", className="text-center text-muted small mb-3"),
+                    dbc.Button("취소", id="btn-analyze-cancel", color="danger", outline=True,
+                               size="sm", className="d-block mx-auto"),
+                ]),
+                html.Div(id="analyze-result-wrap", style={"display": "none"}, children=[
+                    html.Div(id="analyze-result-text", className="text-center mb-3"),
+                    dbc.Button("확인", id="btn-analyze-confirm", color="primary",
+                               size="sm", className="d-block mx-auto px-4"),
+                ]),
             ]),
         ], id="analyze-modal", is_open=False, backdrop="static", centered=True),
 
         html.Div("[ Page 2 — 메일 조회 / AI 요약 / 이메일 TODO ]",
-                 style={"textAlign": "center", "fontSize": "0.72rem",
+                 style={"textAlign": "center", "fontSize": "var(--fs-xs)",
                         "opacity": "0.5", "padding": "6px 0", "color": "#aaa"}),
 
         # ── Toast notification ────────────────────────────────────────────────
@@ -384,7 +411,7 @@ def page3_layout():
                             ],
                             value="all",
                             clearable=False,
-                            style={"minWidth": 100, "fontSize": "0.85rem"},
+                            style={"minWidth": 100, "fontSize": "var(--fs-body)"},
                         ),
                     ], width="auto"),
                     dbc.Col([
@@ -397,7 +424,7 @@ def page3_layout():
                             ],
                             value="default",
                             clearable=False,
-                            style={"minWidth": 110, "fontSize": "0.85rem"},
+                            style={"minWidth": 110, "fontSize": "var(--fs-body)"},
                         ),
                     ], width="auto"),
                 ], align="center", className="g-2"),
@@ -412,7 +439,8 @@ def page3_layout():
                         dbc.Tab(
                             html.Div([
                                 dbc.Row([
-                                    dbc.Col(dbc.Checkbox(id="p3-active-select-all", label="전체선택",
+                                    dbc.Col(dbc.Checkbox(id="p3-active-select-all",
+                                                          label=html.Span(["전체선택", html.Span(id="p3-active-select-count", className="text-muted ms-1")]),
                                                           label_class_name="small ms-1"), width="auto"),
                                     dbc.Col([
                                         dbc.Button("완료 처리", id="p3-btn-complete", size="sm",
@@ -426,7 +454,7 @@ def page3_layout():
                                                           "color": "white"}, className="me-1"),
                                         html.Span(id="p3-notion-sync-status",
                                                   className="text-muted small align-self-center",
-                                                  style={"fontSize": "0.75rem"}),
+                                                  style={"fontSize": "var(--fs-meta)"}),
                                     ], className="ms-auto", width="auto"),
                                 ], align="center", className="mb-2 g-1"),
                                 html.Div(id="p3-active-list", className="todo-list-container"),
@@ -436,7 +464,8 @@ def page3_layout():
                         dbc.Tab(
                             html.Div([
                                 dbc.Row([
-                                    dbc.Col(dbc.Checkbox(id="p3-completed-select-all", label="전체선택",
+                                    dbc.Col(dbc.Checkbox(id="p3-completed-select-all",
+                                                          label=html.Span(["전체선택", html.Span(id="p3-completed-select-count", className="text-muted ms-1")]),
                                                           label_class_name="small ms-1"), width="auto"),
                                     dbc.Col([
                                         dbc.Button("미완료로", id="p3-btn-uncomplete", size="sm",
@@ -452,7 +481,8 @@ def page3_layout():
                         dbc.Tab(
                             html.Div([
                                 dbc.Row([
-                                    dbc.Col(dbc.Checkbox(id="p3-trash-select-all", label="전체선택",
+                                    dbc.Col(dbc.Checkbox(id="p3-trash-select-all",
+                                                          label=html.Span(["전체선택", html.Span(id="p3-trash-select-count", className="text-muted ms-1")]),
                                                           label_class_name="small ms-1"), width="auto"),
                                     dbc.Col([
                                         dbc.Button("복구", id="p3-btn-restore", size="sm",
@@ -476,7 +506,7 @@ def page3_layout():
             dbc.ModalBody([
                 dbc.Label("할 일", className="small fw-semibold"),
                 dbc.Textarea(id="edit-todo-text", rows=3,
-                              style={"background": "#f5f5f5", "fontSize": "0.85rem"},
+                              style={"background": "#f5f5f5", "fontSize": "var(--fs-body)"},
                               className="mb-3"),
                 dbc.Label("우선순위", className="small fw-semibold"),
                 dbc.RadioItems(
@@ -503,7 +533,7 @@ def page3_layout():
         dcc.Store(id="edit-target-id"),
 
         html.Div("[ Page 3 — 전체 TODO 관리 / Notion 동기화 ]",
-                 style={"textAlign": "center", "fontSize": "0.72rem",
+                 style={"textAlign": "center", "fontSize": "var(--fs-xs)",
                         "opacity": "0.5", "padding": "6px 0", "color": "#aaa"}),
 
         dbc.Toast(
@@ -531,6 +561,7 @@ app.layout = html.Div([
     dcc.Store(id="store-selected-email-idx", data=None),
     dcc.Store(id="store-email-checked", data=[]),
     dcc.Store(id="store-todo-checked-p2", data=[]),
+    dcc.Store(id="store-todo-trash-checked-p2", data=[]),
     dcc.Store(id="store-todo-checked-p3-active", data=[]),
     dcc.Store(id="store-todo-checked-p3-completed", data=[]),
     dcc.Store(id="store-todo-checked-p3-trash", data=[]),
@@ -839,14 +870,14 @@ def delete_profile_item(n_clicks_list, lists_data):
 
 def _render_pf_list(field, items):
     if not items:
-        return html.Span("항목 없음", className="text-muted", style={"fontSize": "0.75rem"})
+        return html.Span("항목 없음", className="text-muted", style={"fontSize": "var(--fs-meta)"})
     return [
         html.Span([
             dbc.Badge(item, color="secondary", className="fw-normal me-1",
-                      style={"fontSize": "0.78rem"}),
+                      style={"fontSize": "var(--fs-badge)"}),
             html.Span("×", id={"type": "pf-del", "field": field, "index": i},
                       n_clicks=0,
-                      style={"cursor": "pointer", "color": "#999", "fontSize": "0.85rem",
+                      style={"cursor": "pointer", "color": "#999", "fontSize": "var(--fs-body)",
                              "marginRight": "6px", "userSelect": "none"},
                       className="pf-del-x"),
         ], className="d-inline-flex align-items-center mb-1")
@@ -1056,8 +1087,7 @@ def update_email_checked(values):
     prevent_initial_call=True,
 )
 def select_all_emails(checked, emails):
-    count = len(emails) if emails else 0
-    return [checked] * count
+    return [bool(checked)] * len(ctx.outputs_list)
 
 
 # ── Page 2: AI Analysis (background) ─────────────────────────────────────────
@@ -1067,6 +1097,10 @@ def select_all_emails(checked, emails):
         Output("store-analyze-done", "data"),
         Output("p2-toast", "children"),
         Output("p2-toast", "is_open"),
+        Output("analyze-result-text", "children"),
+        Output("analyze-modal-title", "children"),
+        Output("analyze-progress-wrap", "style"),
+        Output("analyze-result-wrap", "style"),
     ],
     inputs=Input("btn-analyze", "n_clicks"),
     state=[
@@ -1079,7 +1113,7 @@ def select_all_emails(checked, emails):
     ],
     background=True,
     running=[
-        (Output("analyze-modal", "is_open"), True, False),
+        (Output("analyze-modal", "is_open"), True, True),
         (Output("btn-analyze", "disabled"), True, False),
     ],
     progress=[
@@ -1155,19 +1189,118 @@ def analyze_emails(set_progress, n_clicks, checked_indices, emails, user_profile
             })
 
     set_progress((f"완료! {len(checked_indices)}개 분석됨", 100))
+    new_todo_count = len(results) - len(todos or [])
+    result_body = html.Div([
+        html.P("분석이 완료되었습니다.", className="fw-bold mb-3"),
+        html.P(f"분석한 메일: {total}개", className="mb-1 text-muted small"),
+        html.P(f"생성된 TODO: {new_todo_count}개", className="mb-0 text-muted small"),
+    ])
+    done = (done_count or 0) + 1
+    hidden = {"display": "none"}
+    visible = {}
     if errors:
-        all_errors = "\n".join(errors)
-        err_msg = f"오류 {len(errors)}건 발생:\n{all_errors}"
-        return results, (done_count or 0) + 1, err_msg, True
-    return results, (done_count or 0) + 1, f"분석 완료: {total}개 이메일", True
+        err_join = "\n".join(errors)
+        err_msg = f"오류 {len(errors)}건 발생:\n{err_join}"
+        return results, done, err_msg, True, result_body, "분석 완료", hidden, visible
+    return results, done, no_update, False, result_body, "분석 완료", hidden, visible
+
+
+# ── Select-all count labels ───────────────────────────────────────────────────
+@app.callback(
+    Output("email-select-count", "children"),
+    Input("store-email-checked", "data"),
+    State("store-emails", "data"),
+)
+def update_email_count(checked, emails):
+    n = len(checked or [])
+    total = len(emails or [])
+    return f"({n}/{total})"
+
+
+@app.callback(
+    Output("p2-active-select-count", "children"),
+    Input("store-todo-checked-p2", "data"),
+    Input("store-todos", "data"),
+)
+def update_p2_active_count(checked, todos):
+    n = len(checked or [])
+    total = sum(1 for t in (todos or []) if t.get("status") in ("active", "completed"))
+    return f"({n}/{total})"
+
+
+@app.callback(
+    Output("p2-trash-select-count", "children"),
+    Input("store-todo-trash-checked-p2", "data"),
+    Input("store-todos", "data"),
+)
+def update_p2_trash_count(checked, todos):
+    n = len(checked or [])
+    total = sum(1 for t in (todos or []) if t.get("status") == "deleted")
+    return f"({n}/{total})"
+
+
+@app.callback(
+    Output("p3-active-select-count", "children"),
+    Input("store-todo-checked-p3-active", "data"),
+    Input("store-todos", "data"),
+)
+def update_p3_active_count(checked, todos):
+    n = len(checked or [])
+    total = sum(1 for t in (todos or []) if t.get("status") == "active" and t.get("forwarded"))
+    return f"({n}/{total})"
+
+
+@app.callback(
+    Output("p3-completed-select-count", "children"),
+    Input("store-todo-checked-p3-completed", "data"),
+    Input("store-todos", "data"),
+)
+def update_p3_completed_count(checked, todos):
+    n = len(checked or [])
+    total = sum(1 for t in (todos or []) if t.get("status") == "completed" and t.get("forwarded"))
+    return f"({n}/{total})"
+
+
+@app.callback(
+    Output("p3-trash-select-count", "children"),
+    Input("store-todo-checked-p3-trash", "data"),
+    Input("store-todos", "data"),
+)
+def update_p3_trash_count(checked, todos):
+    n = len(checked or [])
+    total = sum(1 for t in (todos or []) if t.get("status") == "deleted" and t.get("forwarded"))
+    return f"({n}/{total})"
+
+
+# ── Todo collapse toggles ─────────────────────────────────────────────────────
+@app.callback(
+    Output({"type": "todo-collapse-p2", "index": MATCH}, "is_open"),
+    Input({"type": "todo-toggle-p2", "index": MATCH}, "n_clicks"),
+    State({"type": "todo-collapse-p2", "index": MATCH}, "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_todo_p2(n, is_open):
+    return not is_open
+
+
+@app.callback(
+    Output({"type": "todo-collapse-p3", "index": MATCH}, "is_open"),
+    Input({"type": "todo-toggle-p3", "index": MATCH}, "n_clicks"),
+    State({"type": "todo-collapse-p3", "index": MATCH}, "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_todo_p3(n, is_open):
+    return not is_open
 
 
 # ── Page 2: Render Todo lists ─────────────────────────────────────────────────
-def _render_todo_item_p2(todo, idx):
+def _render_todo_item_p2(todo, idx, tab="active"):
     status = todo.get("status", "active")
     forwarded = todo.get("forwarded", False)
     text = todo.get("text", "")
     subject = todo.get("email_subject", "")
+    summary = todo.get("summary", "")
+    cb_type = "todo-cb-active-p2" if tab == "active" else "todo-cb-trash-p2"
 
     if status == "deleted":
         text_style = {"textDecoration": "line-through", "color": "#bbb"}
@@ -1181,17 +1314,36 @@ def _render_todo_item_p2(todo, idx):
     return html.Div([
         dbc.Row([
             dbc.Col(
-                dbc.Checkbox(id={"type": "todo-cb-p2", "index": idx}, value=False),
+                dbc.Checkbox(id={"type": cb_type, "index": idx}, value=False),
                 width="auto",
             ),
             dbc.Col([
                 html.Span(text[:60] + ("…" if len(text) > 60 else ""),
                            className="small d-block", style=text_style),
                 html.Span(f"출처: {subject[:30]}", className="text-muted",
-                           style={"fontSize": "0.75rem"}),
+                           style={"fontSize": "var(--fs-meta)"}),
             ]),
-        ], className="g-0 align-items-start"),
-    ], className="todo-item px-2 py-1 border-bottom")
+            dbc.Col(
+                dbc.Button(
+                    html.I(className="bi bi-chevron-down"),
+                    id={"type": "todo-toggle-p2", "index": idx},
+                    size="sm", color="link", className="p-0 text-muted",
+                    style={"fontSize": "var(--fs-meta)", "lineHeight": "1"},
+                ),
+                width="auto",
+            ),
+        ], className="g-0 align-items-center"),
+        dbc.Collapse(
+            html.Div([
+                html.Div("내용 요약", className="text-muted mb-1",
+                         style={"fontSize": "var(--fs-xs)", "fontWeight": "600"}),
+                html.Div(summary or "요약 없음", className="small",
+                         style={"whiteSpace": "pre-wrap", "color": "#555"}),
+            ], className="pt-1 pb-2 ps-4"),
+            id={"type": "todo-collapse-p2", "index": idx},
+            is_open=False,
+        ),
+    ], className="todo-item px-2 pt-1 border-bottom")
 
 
 @app.callback(
@@ -1203,7 +1355,7 @@ def render_active_todos(todos, _):
     if not todos:
         return html.Span("Todo 없음", className="text-muted small p-3 d-block")
     items = [
-        _render_todo_item_p2(t, i)
+        _render_todo_item_p2(t, i, tab="active")
         for i, t in enumerate(todos)
         if t.get("status") in ("active", "completed")
     ]
@@ -1218,7 +1370,7 @@ def render_trash_todos(todos):
     if not todos:
         return html.Span("휴지통 비어있음", className="text-muted small p-3 d-block")
     items = [
-        _render_todo_item_p2(t, i)
+        _render_todo_item_p2(t, i, tab="trash")
         for i, t in enumerate(todos)
         if t.get("status") == "deleted"
     ]
@@ -1228,41 +1380,57 @@ def render_trash_todos(todos):
 # ── Page 2: Todo checkbox state ───────────────────────────────────────────────
 @app.callback(
     Output("store-todo-checked-p2", "data"),
-    Input({"type": "todo-cb-p2", "index": ALL}, "value"),
+    Input({"type": "todo-cb-active-p2", "index": ALL}, "value"),
     State("store-todos", "data"),
     prevent_initial_call=True,
 )
 def update_todo_checked_p2(values, todos):
     if not todos:
         return []
-    active_indices = [i for i, t in enumerate(todos) if t.get("status") in ("active", "completed")]
+    inputs = ctx.inputs_list[0]
     checked = []
-    val_idx = 0
-    for i, t in enumerate(todos):
-        if t.get("status") in ("active", "completed"):
-            if val_idx < len(values) and values[val_idx]:
-                checked.append(i)
-            val_idx += 1
+    for item, val in zip(inputs, values):
+        if val:
+            checked.append(item["id"]["index"])
+    return checked
+
+
+@app.callback(
+    Output("store-todo-trash-checked-p2", "data"),
+    Input({"type": "todo-cb-trash-p2", "index": ALL}, "value"),
+    State("store-todos", "data"),
+    prevent_initial_call=True,
+)
+def update_todo_trash_checked_p2(values, todos):
+    if not todos:
+        return []
+    inputs = ctx.inputs_list[0]
+    checked = []
+    for item, val in zip(inputs, values):
+        if val:
+            checked.append(item["id"]["index"])
     return checked
 
 
 # ── Page 2: Todo select all ───────────────────────────────────────────────────
 @app.callback(
-    Output({"type": "todo-cb-p2", "index": ALL}, "value"),
-    Input("btn-todo-select-all", "n_clicks"),
-    State("store-todos", "data"),
+    Output({"type": "todo-cb-active-p2", "index": ALL}, "value"),
+    Input("todo-active-select-all", "value"),
     prevent_initial_call=True,
 )
-def select_all_todos_p2(n, todos):
-    if not todos:
-        return []
+def select_all_active_p2(checked):
     outputs = ctx.outputs_list
-    if not outputs:
-        return []
-    return [
-        True if todos[o["id"]["index"]].get("status") in ("active", "completed") else False
-        for o in outputs
-    ]
+    return [bool(checked)] * len(outputs)
+
+
+@app.callback(
+    Output({"type": "todo-cb-trash-p2", "index": ALL}, "value"),
+    Input("todo-trash-select-all", "value"),
+    prevent_initial_call=True,
+)
+def select_all_trash_p2(checked):
+    outputs = ctx.outputs_list
+    return [bool(checked)] * len(outputs)
 
 
 # ── Page 2: Todo actions ──────────────────────────────────────────────────────
@@ -1270,14 +1438,13 @@ def select_all_todos_p2(n, todos):
     Output("store-todos", "data", allow_duplicate=True),
     Output("p2-toast", "children", allow_duplicate=True),
     Output("p2-toast", "is_open", allow_duplicate=True),
-    Input("btn-todo-complete", "n_clicks"),
     Input("btn-todo-delete", "n_clicks"),
     Input("btn-todo-forward", "n_clicks"),
     State("store-todo-checked-p2", "data"),
     State("store-todos", "data"),
     prevent_initial_call=True,
 )
-def todo_actions_p2(n_complete, n_delete, n_forward, checked, todos):
+def todo_actions_p2(n_delete, n_forward, checked, todos):
     if not todos:
         return no_update, "항목이 없습니다.", True
 
@@ -1296,20 +1463,11 @@ def todo_actions_p2(n_complete, n_delete, n_forward, checked, todos):
             todos[i]["forwarded"] = True
         return todos, f"{len(targets)}개 전체 TODO로 전달됨", True
 
-    # 완료/삭제는 체크 필수
+    # 삭제는 체크 필수
     if not checked:
         return no_update, "항목을 선택하세요.", True
 
-    if triggered == "btn-todo-complete":
-        for i in checked:
-            if todos[i]["status"] == "active":
-                todos[i]["status"] = "completed"
-            elif todos[i]["status"] == "completed":
-                todos[i]["status"] = "active"
-            if todos[i].get("notion_page_id"):
-                todos[i]["pending_sync"] = True
-        msg = f"{len(checked)}개 완료 처리됨"
-    elif triggered == "btn-todo-delete":
+    if triggered == "btn-todo-delete":
         for i in checked:
             todos[i]["status"] = "deleted"
             if todos[i].get("notion_page_id"):
@@ -1319,6 +1477,59 @@ def todo_actions_p2(n_complete, n_delete, n_forward, checked, todos):
         return no_update, "", False
 
     return todos, msg, True
+
+
+# ── Page 2: Trash actions ─────────────────────────────────────────────────────
+@app.callback(
+    Output("store-todos", "data", allow_duplicate=True),
+    Output("p2-toast", "children", allow_duplicate=True),
+    Output("p2-toast", "is_open", allow_duplicate=True),
+    Input("btn-todo-restore", "n_clicks"),
+    Input("btn-todo-perm-delete", "n_clicks"),
+    State("store-todo-trash-checked-p2", "data"),
+    State("store-todos", "data"),
+    State("store-notion-key", "data"),
+    State("store-notion-db", "data"),
+    prevent_initial_call=True,
+)
+def trash_actions_p2(n_restore, n_perm, checked, todos, notion_key, notion_db):
+    if not todos:
+        return no_update, "항목이 없습니다.", True
+    if not checked:
+        return no_update, "항목을 선택하세요.", True
+
+    triggered = ctx.triggered_id
+    todos = [dict(t) for t in todos]
+
+    if triggered == "btn-todo-restore":
+        for i in checked:
+            todos[i]["status"] = "active"
+        return todos, f"{len(checked)}개 복구됨", True
+    elif triggered == "btn-todo-perm-delete":
+        if notion_key and notion_db:
+            page_ids = [todos[i]["notion_page_id"] for i in checked if todos[i].get("notion_page_id")]
+            if page_ids:
+                try:
+                    from notion_sync import NotionSync
+                    NotionSync(notion_key, notion_db).archive_pages(page_ids)
+                except Exception as e:
+                    logger.warning(f"Notion 아카이브 실패: {e}")
+        todos = [t for i, t in enumerate(todos) if i not in checked]
+        return todos, f"{len(checked)}개 영구삭제됨", True
+
+    return no_update, "", False
+
+
+# ── Analyze modal: confirm close ──────────────────────────────────────────────
+@app.callback(
+    Output("analyze-modal", "is_open", allow_duplicate=True),
+    Output("analyze-progress-bar", "value", allow_duplicate=True),
+    Output("analyze-progress-text", "children", allow_duplicate=True),
+    Input("btn-analyze-confirm", "n_clicks"),
+    prevent_initial_call=True,
+)
+def close_analyze_modal(n):
+    return False, 0, ""
 
 
 # ── Navigation buttons ────────────────────────────────────────────────────────
@@ -1353,7 +1564,7 @@ def back_to_page2(n):
 def _priority_badge(priority):
     colors = {"높음": "danger", "보통": "warning", "낮음": "primary"}
     return dbc.Badge(priority, color=colors.get(priority, "secondary"),
-                     className="me-1", style={"fontSize": "0.7rem"})
+                     className="me-1", style={"fontSize": "var(--fs-badge)"})
 
 
 def _render_todo_item_p3(todo, idx, list_type="active"):
@@ -1361,6 +1572,7 @@ def _render_todo_item_p3(todo, idx, list_type="active"):
     priority = todo.get("priority", "보통")
     due_date = todo.get("due_date", "")
     subject = todo.get("email_subject", "")
+    summary = todo.get("summary", "")
     status = todo.get("status", "active")
 
     text_style = {}
@@ -1382,11 +1594,30 @@ def _render_todo_item_p3(todo, idx, list_type="active"):
                 ]),
                 html.Span(
                     f"출처: {subject[:30]}" + (f" | 마감: {due_date}" if due_date else ""),
-                    style={"fontSize": "0.72rem", "color": "#888"},
+                    style={"fontSize": "var(--fs-xs)", "color": "#888"},
                 ),
             ]),
-        ], className="g-0 align-items-start"),
-    ], className="todo-item px-2 py-1 border-bottom")
+            dbc.Col(
+                dbc.Button(
+                    html.I(className="bi bi-chevron-down"),
+                    id={"type": "todo-toggle-p3", "index": idx},
+                    size="sm", color="link", className="p-0 text-muted",
+                    style={"fontSize": "var(--fs-meta)", "lineHeight": "1"},
+                ),
+                width="auto",
+            ),
+        ], className="g-0 align-items-center"),
+        dbc.Collapse(
+            html.Div([
+                html.Div("내용 요약", className="text-muted mb-1",
+                         style={"fontSize": "var(--fs-xs)", "fontWeight": "600"}),
+                html.Div(summary or "요약 없음", className="small",
+                         style={"whiteSpace": "pre-wrap", "color": "#555"}),
+            ], className="pt-1 pb-2 ps-4"),
+            id={"type": "todo-collapse-p3", "index": idx},
+            is_open=False,
+        ),
+    ], className="todo-item px-2 pt-1 border-bottom")
 
 
 def _get_filtered_sorted(todos, filter_val, sort_val, statuses):
@@ -1425,6 +1656,34 @@ def render_p3_lists(todos, filter_val, sort_val, page):
         return [_render_todo_item_p3(t, i, list_type) for i, (_, t) in enumerate(items)]
 
     return render(active_items, "active"), render(completed_items, "completed"), render(trash_items, "trash")
+
+
+# ── Page 3: Select all ────────────────────────────────────────────────────────
+@app.callback(
+    Output({"type": "todo-cb-p3-active", "index": ALL}, "value"),
+    Input("p3-active-select-all", "value"),
+    prevent_initial_call=True,
+)
+def select_all_p3_active(checked):
+    return [bool(checked)] * len(ctx.outputs_list)
+
+
+@app.callback(
+    Output({"type": "todo-cb-p3-completed", "index": ALL}, "value"),
+    Input("p3-completed-select-all", "value"),
+    prevent_initial_call=True,
+)
+def select_all_p3_completed(checked):
+    return [bool(checked)] * len(ctx.outputs_list)
+
+
+@app.callback(
+    Output({"type": "todo-cb-p3-trash", "index": ALL}, "value"),
+    Input("p3-trash-select-all", "value"),
+    prevent_initial_call=True,
+)
+def select_all_p3_trash(checked):
+    return [bool(checked)] * len(ctx.outputs_list)
 
 
 # ── Page 3: Checkbox states ───────────────────────────────────────────────────
@@ -1489,9 +1748,9 @@ def sync_to_notion(n, todos, checked, notion_key, notion_db):
 
     todos = todos or []
     if checked:
-        target = [todos[i] for i in checked if i < len(todos)]
+        target = [todos[i] for i in checked if i < len(todos) and not todos[i].get("notion_page_id")]
     else:
-        target = [t for t in todos if t.get("status") == "active" and t.get("forwarded")]
+        target = [t for t in todos if t.get("forwarded") and not t.get("notion_page_id")]
 
     if not target:
         return "동기화할 항목이 없습니다.", True, no_update, no_update, no_update
@@ -1602,10 +1861,13 @@ def poll_notion(n_intervals, todos, notion_key, notion_db, db_id):
     State("store-todo-checked-p3-completed", "data"),
     State("store-todo-checked-p3-trash", "data"),
     State("store-todos", "data"),
+    State("store-notion-key", "data"),
+    State("store-notion-db", "data"),
     prevent_initial_call=True,
 )
 def todo_actions_p3(n_complete, n_delete, n_uncomplete, n_del_comp, n_restore, n_perm,
-                    checked_active, checked_completed, checked_trash, todos):
+                    checked_active, checked_completed, checked_trash, todos,
+                    notion_key, notion_db):
     triggered = ctx.triggered_id
     if not todos:
         return no_update, "", False
@@ -1644,6 +1906,14 @@ def todo_actions_p3(n_complete, n_delete, n_uncomplete, n_del_comp, n_restore, n
         msg = f"{len(checked_trash)}개 복구됨"
     elif triggered == "p3-btn-perm-delete" and checked_trash:
         ids_to_delete = {todos[i]["id"] for i in checked_trash}
+        if notion_key and notion_db:
+            page_ids = [todos[i]["notion_page_id"] for i in checked_trash if todos[i].get("notion_page_id")]
+            if page_ids:
+                try:
+                    from notion_sync import NotionSync
+                    NotionSync(notion_key, notion_db).archive_pages(page_ids)
+                except Exception as e:
+                    logger.warning(f"Notion 아카이브 실패: {e}")
         todos = [t for t in todos if t["id"] not in ids_to_delete]
         msg = f"{len(ids_to_delete)}개 영구 삭제됨"
     else:

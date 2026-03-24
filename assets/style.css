@@ -1,3 +1,20 @@
+/* ── Font size tokens (여기서 모든 폰트 크기를 관리) ─────────────────────────
+   --fs-xs    : 극소  - 푸터 라벨, 섹션 소제목
+   --fs-meta  : 소    - 출처·날짜·토글 버튼 등 메타 정보
+   --fs-badge : 배지  - 우선순위·상태 배지
+   --fs-body  : 기본  - 본문·입력창·드롭다운
+   --fs-item  : 항목  - 리스트 항목 텍스트
+   --fs-label : 전체선택 레이블 (Bootstrap small ≈ 0.875em 덮어쓰기용)
+   ──────────────────────────────────────────────────────────────────────── */
+:root {
+    --fs-xs:    0.72rem;
+    --fs-meta:  0.75rem;
+    --fs-badge: 0.78rem;
+    --fs-body:  0.85rem;
+    --fs-item:  0.88rem;
+    --fs-label: 0.80rem;
+}
+
 body {
     background-color: #f0f2f5;
     font-family: 'Segoe UI', sans-serif;
@@ -33,7 +50,7 @@ body {
     border: 1px solid #dee2e6;
     border-radius: 4px;
     padding: 10px;
-    font-size: 0.85rem;
+    font-size: var(--fs-body);
     white-space: pre-wrap;
     word-break: break-word;
 }
@@ -44,7 +61,11 @@ body {
 }
 
 .todo-item {
-    font-size: 0.88rem;
+    font-size: var(--fs-item);
+}
+
+.form-check-label {
+    font-size: var(--fs-label);
 }
 
 .priority-high { color: #D32F2F; font-weight: 600; }
