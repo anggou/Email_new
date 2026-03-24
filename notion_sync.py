@@ -52,6 +52,11 @@ class NotionSync:
             raise Exception(f"HTTP {resp.status_code}: {resp.text}")
         return resp.json()
 
+    def update_page_status(self, page_id: str, new_status: str):
+        """기존 Notion 페이지의 상태 필드만 업데이트합니다."""
+        url = f"https://api.notion.com/v1/pages/{page_id}"
+        self._req("PATCH", url, json={"properties": {"상태": {"select": {"name": new_status}}}})
+
     def _truncate(self, text, limit: int = MAX_TEXT_LENGTH) -> str:
         if not text:
             return ""

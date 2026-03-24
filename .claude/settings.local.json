@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Read(//c/Users/oldba/.claude//**)"
+      "Read(//c/Users/oldba/.claude//**)",
+      "Bash(python -m py_compile app.py)"
     ]
   }
 }
