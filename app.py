@@ -1256,8 +1256,13 @@ def update_todo_checked_p2(values, todos):
 def select_all_todos_p2(n, todos):
     if not todos:
         return []
-    active_count = sum(1 for t in todos if t.get("status") in ("active", "completed"))
-    return [True] * active_count
+    outputs = ctx.outputs_list
+    if not outputs:
+        return []
+    return [
+        True if todos[o["id"]["index"]].get("status") in ("active", "completed") else False
+        for o in outputs
+    ]
 
 
 # ── Page 2: Todo actions ──────────────────────────────────────────────────────
