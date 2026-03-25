@@ -1,7 +1,9 @@
+import multiprocessing
+multiprocessing.freeze_support()
+
 import dash
 from dash import dcc, html, Input, Output, State, ALL, MATCH, ctx, no_update, callback
 import dash_bootstrap_components as dbc
-import diskcache
 import json
 import os
 import uuid
@@ -57,15 +59,23 @@ def fb_save_keys(uid: str, id_token: str, gemini_key: str, notion_key: str, noti
     except Exception as e:
         logger.warning(f"Firestore 키 저장 실패: {e}")
 
-# ── Setup ────────────────────────────────────────────────────────────────────
-os.makedirs("cache", exist_ok=True)
-cache = diskcache.Cache("./cache")
-background_callback_manager = dash.DiskcacheManager(cache)
+# ── Threading-based analysis state ───────────────────────────────────────────
+import threading as _threading
+_analysis = {
+    "running": False,
+    "cancel": _threading.Event(),
+    "progress": 0,
+    "text": "",
+    "status": "idle",   # idle | running | done | error | cancelled
+    "todos": [],
+    "errors": [],
+    "new_todo_count": 0,
+    "total": 0,
+}
 
 app = dash.Dash(
     __name__,
     external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.BOOTSTRAP],
-    background_callback_manager=background_callback_manager,
     suppress_callback_exceptions=True,
     title="Email AI Summarizer",
 )
@@ -583,6 +593,7 @@ app.layout = html.Div([
     dcc.Store(id="store-todo-checked-p3-completed", data=[]),
     dcc.Store(id="store-todo-checked-p3-trash", data=[]),
     dcc.Store(id="store-analyze-done", data=0),
+    dcc.Interval(id="analyze-interval", interval=500, n_intervals=0, disabled=True),
     dcc.Store(id="store-profile-lists", data={"projects":[],"superiors":[],"peers":[],"subordinates":[],"clients":[]}),
     dcc.Store(id="store-todos-p3", storage_type="local", data=[]),
     dcc.Store(id="store-notion-enabled", data=False),
@@ -1022,37 +1033,10 @@ def fetch_emails(n, account, date_str, uid, id_token):
         mgr = OutlookManager()
         target_date = datetime.strptime(date_str, "%Y-%m-%d").date() if date_str else None
 
-        # 1. 클라우드에서 이전 내역 불러오기
-        cloud_emails = []
-        safe_acc = account.replace(".", "_")
-        doc_id = f"{safe_acc}_{date_str}"
-        if uid and id_token:
-            try:
-                res = fb_client.get_data(uid, id_token, "emails", doc_id)
-                if res and "emails" in res:
-                    cloud_emails = res["emails"]
-            except Exception as e:
-                print(f"이메일 동기화 로드 실패: {e}")
+        # Outlook에서 직접 가져오기
+        emails = mgr.get_emails_by_date(account_email=account, target_date=target_date, limit=100)
 
-        # 2. 아웃룩에서 가져오기
-        outlook_emails = mgr.get_emails_by_date(account_email=account, target_date=target_date, limit=100)
-
-        # 3. 중복 병합 로직 (간단히 제목+보낸사람 기준으로 확인)
-        existing_keys = {f"{e.get('subject')}_{e.get('sender')}" for e in cloud_emails}
-        for e in outlook_emails:
-            k = f"{e.get('subject')}_{e.get('sender')}"
-            if k not in existing_keys:
-                cloud_emails.append(e)
-                existing_keys.add(k)
-
-        # 4. 다시 클라우드에 백업
-        if uid and id_token:
-            try:
-                fb_client.save_data(uid, id_token, "emails", doc_id, {"emails": cloud_emails})
-            except Exception as e:
-                print(f"이메일 동기화 저장 실패: {e}")
-
-        return cloud_emails, f"클라우드 연동 완료: 총 {len(cloud_emails)}개 메일"
+        return emails, f"조회 완료: 총 {len(emails)}개 메일"
     except Exception as e:
         return [], f"오류: {e}"
 
@@ -1147,62 +1131,40 @@ def select_all_emails(checked, emails):
     return [bool(checked)] * len(ctx.outputs_list)
 
 
-# ── Page 2: AI Analysis (background) ─────────────────────────────────────────
-@app.callback(
-    output=[
-        Output("store-todos", "data"),
-        Output("store-analyze-done", "data"),
-        Output("p2-toast", "children"),
-        Output("p2-toast", "is_open"),
-        Output("analyze-result-text", "children"),
-        Output("analyze-modal-title", "children"),
-        Output("analyze-progress-wrap", "style"),
-        Output("analyze-result-wrap", "style"),
-    ],
-    inputs=Input("btn-analyze", "n_clicks"),
-    state=[
-        State("store-email-checked", "data"),
-        State("store-emails", "data"),
-        State("store-user-profile", "data"),
-        State("store-api-key", "data"),
-        State("store-todos", "data"),
-        State("store-analyze-done", "data"),
-    ],
-    background=True,
-    running=[
-        (Output("analyze-modal", "is_open"), True, True),
-        (Output("btn-analyze", "disabled"), True, False),
-    ],
-    progress=[
-        Output("analyze-progress-text", "children"),
-        Output("analyze-progress-bar", "value"),
-    ],
-    cancel=Input("btn-analyze-cancel", "n_clicks"),
-    prevent_initial_call=True,
-)
-def analyze_emails(set_progress, n_clicks, checked_indices, emails, user_profile, api_key, todos, done_count):
-    if not checked_indices or not emails:
-        return todos or [], done_count, "분석할 메일을 선택하세요.", True
-
-    set_progress(("준비 중…", 0))
-    results = list(todos or [])
+# ── Page 2: AI Analysis (threading-based) ────────────────────────────────────
+def _run_analysis_thread(checked_indices, emails, user_profile, api_key, existing_todos):
+    """별도 스레드에서 AI 분석 실행"""
+    global _analysis
+    _analysis["status"] = "running"
+    _analysis["progress"] = 0
+    _analysis["text"] = "준비 중…"
+    _analysis["errors"] = []
+    _analysis["todos"] = list(existing_todos or [])
 
     try:
         from ai_processor import AIProcessor
         processor = AIProcessor(override_api_key=api_key)
     except Exception as e:
-        return results, done_count, f"API 오류: {e}", True
+        _analysis["status"] = "error"
+        _analysis["text"] = f"API 연결 실패: {e}"
+        return
 
     user_context = build_user_context(user_profile) if user_profile else ""
     total = len(checked_indices)
-
+    _analysis["total"] = total
+    results = list(existing_todos or [])
     errors = []
+
     for i, idx in enumerate(checked_indices):
+        if _analysis["cancel"].is_set():
+            _analysis["status"] = "cancelled"
+            return
+
         if idx >= len(emails):
             continue
         email = emails[idx]
-        progress_pct = int((i / total) * 100)
-        set_progress((f"{i + 1}/{total} 분석 중… {email.get('subject', '')[:30]}", progress_pct))
+        _analysis["progress"] = int((i / total) * 100)
+        _analysis["text"] = f"{i + 1}/{total} 분석 중… {email.get('subject', '')[:30]}"
 
         try:
             result = processor.analyze_email(
@@ -1214,8 +1176,6 @@ def analyze_emails(set_progress, n_clicks, checked_indices, emails, user_profile
         except Exception as e:
             err_detail = f"[{email.get('subject','?')[:20]}] {e}"
             errors.append(err_detail)
-            with open("error_log.txt", "a", encoding="utf-8") as f:
-                f.write(err_detail + "\n")
             continue
 
         summary = result.get("summary", "")
@@ -1245,21 +1205,147 @@ def analyze_emails(set_progress, n_clicks, checked_indices, emails, user_profile
                 "mail_type": mail_type,
             })
 
-    set_progress((f"완료! {len(checked_indices)}개 분석됨", 100))
-    new_todo_count = len(results) - len(todos or [])
-    result_body = html.Div([
-        html.P("분석이 완료되었습니다.", className="fw-bold mb-3"),
-        html.P(f"분석한 메일: {total}개", className="mb-1 text-muted small"),
-        html.P(f"생성된 TODO: {new_todo_count}개", className="mb-0 text-muted small"),
-    ])
-    done = (done_count or 0) + 1
+    _analysis["todos"] = results
+    _analysis["errors"] = errors
+    _analysis["new_todo_count"] = len(results) - len(existing_todos or [])
+    _analysis["progress"] = 100
+    _analysis["text"] = f"완료! {total}개 분석됨"
+    _analysis["status"] = "done"
+
+
+@app.callback(
+    Output("analyze-modal", "is_open"),
+    Output("btn-analyze", "disabled"),
+    Output("analyze-interval", "disabled"),
+    Output("analyze-progress-wrap", "style", allow_duplicate=True),
+    Output("analyze-result-wrap", "style", allow_duplicate=True),
+    Output("analyze-modal-title", "children", allow_duplicate=True),
+    Input("btn-analyze", "n_clicks"),
+    State("store-email-checked", "data"),
+    State("store-emails", "data"),
+    State("store-user-profile", "data"),
+    State("store-api-key", "data"),
+    State("store-todos", "data"),
+    prevent_initial_call=True,
+)
+def start_analyze(n_clicks, checked_indices, emails, user_profile, api_key, todos):
+    global _analysis
     hidden = {"display": "none"}
     visible = {}
-    if errors:
-        err_join = "\n".join(errors)
-        err_msg = f"오류 {len(errors)}건 발생:\n{err_join}"
-        return results, done, err_msg, True, result_body, "분석 완료", hidden, visible
-    return results, done, no_update, False, result_body, "분석 완료", hidden, visible
+
+    if not checked_indices or not emails:
+        return no_update, no_update, True, visible, hidden, "알림"
+
+    _analysis["cancel"].clear()
+    _analysis["status"] = "idle"
+
+    t = _threading.Thread(
+        target=_run_analysis_thread,
+        args=(checked_indices, emails, user_profile, api_key, todos),
+        daemon=True,
+    )
+    t.start()
+
+    return True, True, False, visible, hidden, "AI 분석 중…"
+
+
+@app.callback(
+    Output("analyze-progress-text", "children"),
+    Output("analyze-progress-bar", "value"),
+    Output("analyze-progress-wrap", "style"),
+    Output("analyze-result-wrap", "style"),
+    Output("analyze-result-text", "children"),
+    Output("analyze-modal-title", "children"),
+    Output("store-todos", "data"),
+    Output("store-analyze-done", "data"),
+    Output("btn-analyze", "disabled", allow_duplicate=True),
+    Output("analyze-interval", "disabled", allow_duplicate=True),
+    Output("p2-toast", "children"),
+    Output("p2-toast", "is_open"),
+    Input("analyze-interval", "n_intervals"),
+    State("store-todos", "data"),
+    State("store-analyze-done", "data"),
+    prevent_initial_call=True,
+)
+def poll_analysis_progress(n, todos, done_count):
+    global _analysis
+    hidden = {"display": "none"}
+    visible = {}
+    status = _analysis["status"]
+
+    if status == "running":
+        return (
+            _analysis["text"], _analysis["progress"],
+            visible, hidden,
+            no_update, "AI 분석 중…",
+            no_update, no_update,
+            no_update, False,
+            no_update, no_update,
+        )
+
+    if status == "done":
+        new_todos = _analysis["todos"]
+        errors = _analysis["errors"]
+        new_count = _analysis["new_todo_count"]
+        total = _analysis["total"]
+        done = (done_count or 0) + 1
+        _analysis["status"] = "idle"
+
+        result_body = html.Div([
+            html.P("분석이 완료되었습니다.", className="fw-bold mb-3"),
+            html.P(f"분석한 메일: {total}개", className="mb-1 text-muted small"),
+            html.P(f"생성된 TODO: {new_count}개", className="mb-0 text-muted small"),
+        ])
+        toast_msg = no_update
+        toast_open = no_update
+        if errors:
+            toast_msg = f"오류 {len(errors)}건 발생"
+            toast_open = True
+
+        return (
+            "완료!", 100,
+            hidden, visible,
+            result_body, "분석 완료",
+            new_todos, done,
+            False, True,
+            toast_msg, toast_open,
+        )
+
+    if status in ("error", "cancelled"):
+        msg = _analysis["text"]
+        _analysis["status"] = "idle"
+        return (
+            msg, 0,
+            hidden, visible,
+            msg, "오류" if status == "error" else "취소됨",
+            no_update, no_update,
+            False, True,
+            msg, True,
+        )
+
+    return (
+        no_update, no_update,
+        no_update, no_update,
+        no_update, no_update,
+        no_update, no_update,
+        no_update, no_update,
+        no_update, no_update,
+    )
+
+
+@app.callback(
+    Output("analyze-modal", "is_open", allow_duplicate=True),
+    Output("analyze-interval", "disabled", allow_duplicate=True),
+    Output("analyze-progress-bar", "value", allow_duplicate=True),
+    Output("analyze-progress-text", "children", allow_duplicate=True),
+    Input("btn-analyze-cancel", "n_clicks"),
+    prevent_initial_call=True,
+)
+def cancel_analyze(n):
+    global _analysis
+    _analysis["cancel"].set()
+    _analysis["status"] = "idle"
+    return False, True, 0, ""
 
 
 # ── Select-all count labels ───────────────────────────────────────────────────
@@ -1606,13 +1692,14 @@ def trash_actions_p2(n_restore, n_perm, checked, todos, notion_key, notion_db):
 # ── Analyze modal: confirm close ──────────────────────────────────────────────
 @app.callback(
     Output("analyze-modal", "is_open", allow_duplicate=True),
+    Output("analyze-interval", "disabled", allow_duplicate=True),
     Output("analyze-progress-bar", "value", allow_duplicate=True),
     Output("analyze-progress-text", "children", allow_duplicate=True),
     Input("btn-analyze-confirm", "n_clicks"),
     prevent_initial_call=True,
 )
 def close_analyze_modal(n):
-    return False, 0, ""
+    return False, True, 0, ""
 
 
 # ── Navigation buttons ────────────────────────────────────────────────────────
