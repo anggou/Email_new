@@ -8,12 +8,54 @@ import uuid
 from datetime import date, datetime
 
 import logging
+import traceback
 import webbrowser
 import threading
+import sys
+from firebase_client import FirebaseClient
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
-load_dotenv()
+
+# PyInstaller exe 실행 시 번들된 .env 파일 위치(sys._MEIPASS) 기준으로 로드
+if getattr(sys, 'frozen', False):
+    _basedir = sys._MEIPASS
+else:
+    _basedir = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(_basedir, '.env'))
+
+fb_client = FirebaseClient(
+    api_key=os.getenv("FIREBASE_API_KEY", ""),
+    project_id=os.getenv("FIREBASE_PROJECT_ID", ""),
+)
+
+
+def fb_load_settings(uid: str, id_token: str) -> dict:
+    """Firestore에서 프로필 + API 키 불러오기. 없으면 빈 dict 반환."""
+    try:
+        profile  = fb_client.get_data(uid, id_token, "profile", "main") or {}
+        api_keys = fb_client.get_data(uid, id_token, "settings", "keys") or {}
+        return {"profile": profile, "api_keys": api_keys}
+    except Exception:
+        return {"profile": {}, "api_keys": {}}
+
+
+def fb_save_profile(uid: str, id_token: str, profile: dict):
+    try:
+        fb_client.save_data(uid, id_token, "profile", "main", profile)
+    except Exception as e:
+        logger.warning(f"Firestore 프로필 저장 실패: {e}")
+
+
+def fb_save_keys(uid: str, id_token: str, gemini_key: str, notion_key: str, notion_db: str):
+    try:
+        fb_client.save_data(uid, id_token, "settings", "keys", {
+            "gemini_key": gemini_key,
+            "notion_key": notion_key,
+            "notion_db":  notion_db,
+        })
+    except Exception as e:
+        logger.warning(f"Firestore 키 저장 실패: {e}")
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 os.makedirs("cache", exist_ok=True)
@@ -107,6 +149,24 @@ def _pf_list_widget(field, label, placeholder):
     ])
 
 # ── Page layouts ──────────────────────────────────────────────────────────────
+def page0_layout():
+    return dbc.Container([
+        dbc.Row([
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardBody([
+                        html.H3("이메일 요약 앱", className="text-center mb-3 fw-bold"),
+                        html.P("계정에 로그인하거나 새로 가입하세요.", className="text-center text-muted small mb-4"),
+                        dbc.Input(id="auth-email", type="email", placeholder="이메일", className="mb-2"),
+                        dbc.Input(id="auth-password", type="password", placeholder="비밀번호", className="mb-3"),
+                        dbc.Button("로그인", id="btn-login", color="primary", className="w-100 mb-2 fw-bold"),
+                        dbc.Button("회원가입", id="btn-signup", color="secondary", outline=True, className="w-100"),
+                        html.Div(id="auth-error", className="text-danger mt-3 small text-center"),
+                    ])
+                ], className="card-clean mt-5 shadow-sm"),
+            ], md={"size": 6, "offset": 3}, lg={"size": 4, "offset": 4}),
+        ]),
+    ], fluid=True, className="py-4")
 
 def page1_layout():
     return dbc.Container([
@@ -131,17 +191,24 @@ def page1_layout():
                             dbc.Button("표시", id="btn-toggle-api-key", color="secondary", outline=True, size="sm"),
                         ], className="mb-3"),
 
-                        dbc.Label([
-                            "Notion API 키",
-                            html.A(" (키 발급/관리)", href="https://www.notion.so/my-integrations",
-                                   target="_blank", className="ms-1 small text-primary"),
-                        ], className="fw-semibold"),
-                        dbc.InputGroup([
-                            dbc.Input(id="notion-key-input", type="password", placeholder="secret_xxxxxx"),
-                            dbc.Button("표시", id="btn-toggle-notion-key", color="secondary", outline=True, size="sm"),
-                        ], className="mb-1"),
-                        dbc.Input(id="notion-db-input", placeholder="Notion 페이지 URL (DB가 생성될 위치)",
-                                  size="sm", className="mb-3"),
+                        dbc.Button("Notion 연동 사용 ▾ (선택)", id="btn-toggle-notion",
+                                   color="secondary", outline=True, size="sm",
+                                   className="mb-2 w-100"),
+                        dbc.Collapse(id="notion-collapse", is_open=False, children=[
+                            dbc.Card(dbc.CardBody([
+                                dbc.Label([
+                                    "Notion API 키",
+                                    html.A(" (키 발급/관리)", href="https://www.notion.so/my-integrations",
+                                           target="_blank", className="ms-1 small text-primary"),
+                                ], className="small fw-semibold"),
+                                dbc.InputGroup([
+                                    dbc.Input(id="notion-key-input", type="password", placeholder="secret_xxxxxx"),
+                                    dbc.Button("표시", id="btn-toggle-notion-key", color="secondary", outline=True, size="sm"),
+                                ], className="mb-1"),
+                                dbc.Input(id="notion-db-input", placeholder="Notion 페이지 URL (DB가 생성될 위치)",
+                                          size="sm"),
+                            ]), className="bg-light border-0 mb-2"),
+                        ]),
 
                         dbc.Button("내 정보 입력 ▾", id="btn-toggle-profile",
                                    color="secondary", outline=True, size="sm",
@@ -500,7 +567,9 @@ def page3_layout():
 # ── Main app layout ───────────────────────────────────────────────────────────
 app.layout = html.Div([
     # Stores
-    dcc.Store(id="store-page", data=1),
+    dcc.Store(id="store-page", data=0),
+    dcc.Store(id="store-auth-token", storage_type="local", data=""),
+    dcc.Store(id="store-uid", storage_type="local", data=""),
     dcc.Store(id="store-account", data=""),
     dcc.Store(id="store-api-key", data=""),
     dcc.Store(id="store-user-profile", data={}),
@@ -515,13 +584,16 @@ app.layout = html.Div([
     dcc.Store(id="store-todo-checked-p3-trash", data=[]),
     dcc.Store(id="store-analyze-done", data=0),
     dcc.Store(id="store-profile-lists", data={"projects":[],"superiors":[],"peers":[],"subordinates":[],"clients":[]}),
+    dcc.Store(id="store-todos-p3", storage_type="local", data=[]),
+    dcc.Store(id="store-notion-enabled", data=False),
     dcc.Store(id="store-notion-key", data=""),
     dcc.Store(id="store-notion-db", data=""),
     dcc.Store(id="store-notion-db-id", data=""),
     dcc.Interval(id="notion-poll-interval", interval=60*1000, n_intervals=0, disabled=False),
 
     # Pages
-    html.Div(id="page1-container", children=page1_layout()),
+    html.Div(id="page0-container", children=page0_layout()),
+    html.Div(id="page1-container", style={"display": "none"}, children=page1_layout()),
     html.Div(id="page2-container", style={"display": "none"}, children=page2_layout()),
     html.Div(id="page3-container", style={"display": "none"}, children=page3_layout()),
 ])
@@ -533,6 +605,7 @@ app.layout = html.Div([
 
 # ── Page visibility ───────────────────────────────────────────────────────────
 @app.callback(
+    Output("page0-container", "style"),
     Output("page1-container", "style"),
     Output("page2-container", "style"),
     Output("page3-container", "style"),
@@ -542,10 +615,72 @@ def toggle_pages(page):
     show = {"display": "block"}
     hide = {"display": "none"}
     return (
+        show if page == 0 else hide,
         show if page == 1 else hide,
         show if page == 2 else hide,
         show if page == 3 else hide,
     )
+
+
+# ── Auth Logic ────────────────────────────────────────────────────────────────
+@app.callback(
+    Output("store-auth-token", "data"),
+    Output("store-uid", "data"),
+    Output("store-page", "data", allow_duplicate=True),
+    Output("auth-error", "children"),
+    Output("profile-name", "value", allow_duplicate=True),
+    Output("profile-role", "value", allow_duplicate=True),
+    Output("store-profile-lists", "data", allow_duplicate=True),
+    Output("api-key-input", "value", allow_duplicate=True),
+    Output("notion-key-input", "value", allow_duplicate=True),
+    Output("notion-db-input", "value", allow_duplicate=True),
+    Input("btn-login", "n_clicks"),
+    Input("btn-signup", "n_clicks"),
+    State("auth-email", "value"),
+    State("auth-password", "value"),
+    prevent_initial_call=True,
+)
+def handle_auth(n_login, n_signup, email, password):
+    triggered = ctx.triggered_id
+    empty = (no_update,) * 6  # profile/key 필드 no_update
+    if not email or not password:
+        return no_update, no_update, no_update, "이메일과 비밀번호를 모두 입력하세요.", *empty
+
+    try:
+        if triggered == "btn-login":
+            res = fb_client.sign_in(email, password)
+        elif triggered == "btn-signup":
+            res = fb_client.sign_up(email, password)
+        else:
+            return no_update, no_update, no_update, "", *empty
+
+        id_token = res.get("idToken")
+        uid      = res.get("localId")
+
+        # Firestore에서 저장된 데이터 불러오기
+        saved    = fb_load_settings(uid, id_token)
+        profile  = saved.get("profile", {})
+        api_keys = saved.get("api_keys", {})
+
+        pf_lists = {
+            "projects":     profile.get("projects", []),
+            "superiors":    profile.get("superiors", []),
+            "peers":        profile.get("peers", []),
+            "subordinates": profile.get("subordinates", []),
+            "clients":      profile.get("clients", []),
+        }
+
+        return (
+            id_token, uid, 1, "",
+            profile.get("name", ""),
+            profile.get("role", ""),
+            pf_lists,
+            api_keys.get("gemini_key", ""),
+            api_keys.get("notion_key", ""),
+            api_keys.get("notion_db",  ""),
+        )
+    except Exception as e:
+        return no_update, no_update, no_update, str(e), *empty
 
 
 # ── Page 1: Load accounts on startup ─────────────────────────────────────────
@@ -595,6 +730,20 @@ def toggle_notion_key_visibility(n, current_type):
     return "password", "표시"
 
 
+# ── Page 1: Toggle Notion collapse ───────────────────────────────────────────
+@app.callback(
+    Output("notion-collapse", "is_open"),
+    Output("btn-toggle-notion", "children"),
+    Input("btn-toggle-notion", "n_clicks"),
+    State("notion-collapse", "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_notion_collapse(n, is_open):
+    if not is_open:
+        return True, "Notion 연동 사용 ▴ (선택)"
+    return False, "Notion 연동 사용 ▾ (선택)"
+
+
 # ── Page 1: Toggle profile collapse ───────────────────────────────────────────
 @app.callback(
     Output("profile-collapse", "is_open"),
@@ -616,12 +765,43 @@ def toggle_profile(n, is_open):
     Output("notion-key-input", "value"),
     Output("notion-db-input", "value"),
     Output("store-todos", "data", allow_duplicate=True),
+    Output("store-todos-p3", "data", allow_duplicate=True),
     Input("account-dropdown", "value"),
+    State("store-uid", "data"),
+    State("store-auth-token", "data"),
     prevent_initial_call=True,
 )
-def load_profile(account):
-    profiles = load_all_profiles()
-    p = profiles.get(account, {}) if account else {}
+def load_profile(account, uid, id_token):
+    p = {}
+    keys = {}
+    todos_data = no_update
+    todos_p3_data = no_update
+    if uid and id_token and account:
+        safe_acc = account.replace(".", "_")
+        try:
+            cloud_p = fb_client.get_data(uid, id_token, "profiles", safe_acc)
+            if cloud_p: p = cloud_p
+            # 저장 경로(profile/main) fallback
+            if not p:
+                cloud_p_main = fb_client.get_data(uid, id_token, "profile", "main")
+                if cloud_p_main: p = cloud_p_main
+            cloud_keys = fb_client.get_data(uid, id_token, "keys", safe_acc)
+            if cloud_keys: keys = cloud_keys
+            # settings/keys fallback
+            if not keys:
+                cloud_keys_main = fb_client.get_data(uid, id_token, "settings", "keys")
+                if cloud_keys_main: keys = cloud_keys_main
+            cloud_todos = fb_client.get_data(uid, id_token, "todos", safe_acc)
+            if cloud_todos and "todos" in cloud_todos: todos_data = cloud_todos["todos"]
+            cloud_todos_p3 = fb_client.get_data(uid, id_token, "todos-p3", safe_acc)
+            if cloud_todos_p3 and "todos" in cloud_todos_p3: todos_p3_data = cloud_todos_p3["todos"]
+        except Exception as e:
+            print(f"Firebase 로드 실패: {e}")
+
+    if not p:
+        profiles = load_all_profiles()
+        p = profiles.get(account, {})
+
     return (
         account or "",
         p.get("name", ""),
@@ -633,10 +813,11 @@ def load_profile(account):
             "subordinates": p.get("subordinates", []),
             "clients":      p.get("clients", []),
         },
-        "",
-        "",
-        "",
-        no_update
+        keys.get("gemini", ""),
+        keys.get("notion_key", ""),
+        keys.get("notion_db", ""),
+        todos_data,
+        todos_p3_data
     )
 
 
@@ -648,9 +829,11 @@ def load_profile(account):
     State("profile-name", "value"),
     State("profile-role", "value"),
     State("store-profile-lists", "data"),
+    State("store-uid", "data"),
+    State("store-auth-token", "data"),
     prevent_initial_call=True,
 )
-def save_profile(n, account, name, role, lists_data):
+def save_profile(n, account, name, role, lists_data, uid, id_token):
     if not account:
         return "계정을 먼저 선택하세요."
     lists_data = lists_data or {}
@@ -664,9 +847,20 @@ def save_profile(n, account, name, role, lists_data):
         "subordinates": lists_data.get("subordinates", []),
         "clients":      lists_data.get("clients", []),
     }
+
     profiles = load_all_profiles()
     profiles[account] = profile_data
     save_all_profiles(profiles)
+
+    if uid and id_token:
+        fb_save_profile(uid, id_token, profile_data)
+        # profiles/{safe_acc} 경로에도 함께 저장 (load_profile과 경로 통일)
+        safe_acc = account.replace(".", "_")
+        try:
+            fb_client.save_data(uid, id_token, "profiles", safe_acc, profile_data)
+        except Exception as e:
+            logger.warning(f"Firestore profiles 저장 실패: {e}")
+
     return "저장됨 ✓"
 
 
@@ -771,22 +965,33 @@ def render_profile_lists(data):
     Output("store-user-profile", "data"),
     Output("store-notion-key", "data"),
     Output("store-notion-db", "data"),
+    Output("store-notion-enabled", "data"),
     Output("page1-error", "children"),
     Input("btn-next-page2", "n_clicks"),
     State("account-dropdown", "value"),
     State("api-key-input", "value"),
     State("notion-key-input", "value"),
     State("notion-db-input", "value"),
+    State("notion-collapse", "is_open"),
+    State("store-uid", "data"),
+    State("store-auth-token", "data"),
     prevent_initial_call=True,
 )
-def go_to_page2(n, account, api_key, notion_key, notion_db):
+def go_to_page2(n, account, api_key, notion_key, notion_db, notion_open, uid, id_token):
     if not account:
         return no_update, no_update, no_update, no_update, no_update, no_update, "계정을 선택해주세요."
     if not api_key or api_key.strip() == "":
         return no_update, no_update, no_update, no_update, no_update, no_update, "Gemini API 키를 입력해주세요."
+
+    notion_enabled = bool(notion_open and notion_key and notion_key.strip())
+
+    if uid and id_token:
+        fb_save_keys(uid, id_token, api_key.strip(),
+                     (notion_key or "").strip(), (notion_db or "").strip())
+
     profiles = load_all_profiles()
     profile = profiles.get(account, {})
-    return 2, account, api_key.strip(), profile, (notion_key or "").strip(), (notion_db or "").strip(), ""
+    return 2, account, api_key.strip(), profile, (notion_key or "").strip(), (notion_db or "").strip(), notion_enabled, ""
 
 
 # ── Page 2: Update account info label ────────────────────────────────────────
@@ -805,17 +1010,49 @@ def update_account_info(account):
     Input("btn-refresh", "n_clicks"),
     State("store-account", "data"),
     State("p2-date-picker", "date"),
+    State("store-uid", "data"),
+    State("store-auth-token", "data"),
     prevent_initial_call=True,
 )
-def fetch_emails(n, account, date_str):
+def fetch_emails(n, account, date_str, uid, id_token):
     if not account:
         return [], "계정을 선택하세요."
     try:
         from outlook_manager import OutlookManager
         mgr = OutlookManager()
         target_date = datetime.strptime(date_str, "%Y-%m-%d").date() if date_str else None
-        emails = mgr.get_emails_by_date(account_email=account, target_date=target_date, limit=100)
-        return emails, f"총 {len(emails)}개 메일"
+
+        # 1. 클라우드에서 이전 내역 불러오기
+        cloud_emails = []
+        safe_acc = account.replace(".", "_")
+        doc_id = f"{safe_acc}_{date_str}"
+        if uid and id_token:
+            try:
+                res = fb_client.get_data(uid, id_token, "emails", doc_id)
+                if res and "emails" in res:
+                    cloud_emails = res["emails"]
+            except Exception as e:
+                print(f"이메일 동기화 로드 실패: {e}")
+
+        # 2. 아웃룩에서 가져오기
+        outlook_emails = mgr.get_emails_by_date(account_email=account, target_date=target_date, limit=100)
+
+        # 3. 중복 병합 로직 (간단히 제목+보낸사람 기준으로 확인)
+        existing_keys = {f"{e.get('subject')}_{e.get('sender')}" for e in cloud_emails}
+        for e in outlook_emails:
+            k = f"{e.get('subject')}_{e.get('sender')}"
+            if k not in existing_keys:
+                cloud_emails.append(e)
+                existing_keys.add(k)
+
+        # 4. 다시 클라우드에 백업
+        if uid and id_token:
+            try:
+                fb_client.save_data(uid, id_token, "emails", doc_id, {"emails": cloud_emails})
+            except Exception as e:
+                print(f"이메일 동기화 저장 실패: {e}")
+
+        return cloud_emails, f"클라우드 연동 완료: 총 {len(cloud_emails)}개 메일"
     except Exception as e:
         return [], f"오류: {e}"
 
@@ -1062,41 +1299,41 @@ def update_p2_trash_count(checked, todos):
 @app.callback(
     Output("p3-active-select-count", "children"),
     Input("store-todo-checked-p3-active", "data"),
-    Input("store-todos", "data"),
+    Input("store-todos-p3", "data"),
 )
 def update_p3_active_count(checked, todos):
     n = len(checked or [])
-    total = sum(1 for t in (todos or []) if t.get("status") == "active" and t.get("forwarded"))
+    total = sum(1 for t in (todos or []) if t.get("status") == "active")
     return f"({n}/{total})"
 
 
 @app.callback(
     Output("p3-completed-select-count", "children"),
     Input("store-todo-checked-p3-completed", "data"),
-    Input("store-todos", "data"),
+    Input("store-todos-p3", "data"),
 )
 def update_p3_completed_count(checked, todos):
     n = len(checked or [])
-    total = sum(1 for t in (todos or []) if t.get("status") == "completed" and t.get("forwarded"))
+    total = sum(1 for t in (todos or []) if t.get("status") == "completed")
     return f"({n}/{total})"
 
 
 @app.callback(
     Output("p3-trash-select-count", "children"),
     Input("store-todo-checked-p3-trash", "data"),
-    Input("store-todos", "data"),
+    Input("store-todos-p3", "data"),
 )
 def update_p3_trash_count(checked, todos):
     n = len(checked or [])
-    total = sum(1 for t in (todos or []) if t.get("status") == "deleted" and t.get("forwarded"))
+    total = sum(1 for t in (todos or []) if t.get("status") == "deleted")
     return f"({n}/{total})"
 
 
 # ── Todo collapse toggles ─────────────────────────────────────────────────────
 @app.callback(
-    Output({"type": "todo-collapse-p2", "index": MATCH}, "is_open"),
-    Input({"type": "todo-toggle-p2", "index": MATCH}, "n_clicks"),
-    State({"type": "todo-collapse-p2", "index": MATCH}, "is_open"),
+    Output({"type": "todo-collapse-p2", "index": MATCH, "st": MATCH}, "is_open"),
+    Input({"type": "todo-toggle-p2", "index": MATCH, "st": MATCH}, "n_clicks"),
+    State({"type": "todo-collapse-p2", "index": MATCH, "st": MATCH}, "is_open"),
     prevent_initial_call=True,
 )
 def toggle_todo_p2(n, is_open):
@@ -1104,9 +1341,9 @@ def toggle_todo_p2(n, is_open):
 
 
 @app.callback(
-    Output({"type": "todo-collapse-p3", "index": MATCH}, "is_open"),
-    Input({"type": "todo-toggle-p3", "index": MATCH}, "n_clicks"),
-    State({"type": "todo-collapse-p3", "index": MATCH}, "is_open"),
+    Output({"type": "todo-collapse-p3", "index": MATCH, "st": MATCH}, "is_open"),
+    Input({"type": "todo-toggle-p3", "index": MATCH, "st": MATCH}, "n_clicks"),
+    State({"type": "todo-collapse-p3", "index": MATCH, "st": MATCH}, "is_open"),
     prevent_initial_call=True,
 )
 def toggle_todo_p3(n, is_open):
@@ -1146,7 +1383,7 @@ def _render_todo_item_p2(todo, idx, tab="active"):
             dbc.Col(
                 dbc.Button(
                     html.I(className="bi bi-chevron-down"),
-                    id={"type": "todo-toggle-p2", "index": idx},
+                    id={"type": "todo-toggle-p2", "index": idx, "st": status},
                     size="sm", color="link", className="p-0 text-muted",
                     style={"fontSize": "var(--fs-meta)", "lineHeight": "1"},
                 ),
@@ -1160,7 +1397,7 @@ def _render_todo_item_p2(todo, idx, tab="active"):
                 html.Div(summary or "요약 없음", className="small",
                          style={"whiteSpace": "pre-wrap", "color": "#555"}),
             ], className="pt-1 pb-2 ps-4"),
-            id={"type": "todo-collapse-p2", "index": idx},
+            id={"type": "todo-collapse-p2", "index": idx, "st": status},
             is_open=False,
         ),
     ], className="todo-item px-2 pt-1 border-bottom")
@@ -1212,6 +1449,7 @@ def update_todo_checked_p2(values, todos):
     for item, val in zip(inputs, values):
         if val:
             checked.append(item["id"]["index"])
+    print(f"[DEBUG] checked-p2 updated: {checked}, values={values}", flush=True)
     return checked
 
 
@@ -1256,47 +1494,69 @@ def select_all_trash_p2(checked):
 # ── Page 2: Todo actions ──────────────────────────────────────────────────────
 @app.callback(
     Output("store-todos", "data", allow_duplicate=True),
+    Output("store-todos-p3", "data", allow_duplicate=True),
     Output("p2-toast", "children", allow_duplicate=True),
     Output("p2-toast", "is_open", allow_duplicate=True),
     Input("btn-todo-delete", "n_clicks"),
     Input("btn-todo-forward", "n_clicks"),
     State("store-todo-checked-p2", "data"),
     State("store-todos", "data"),
+    State("store-todos-p3", "data"),
     prevent_initial_call=True,
 )
-def todo_actions_p2(n_delete, n_forward, checked, todos):
-    if not todos:
-        return no_update, "항목이 없습니다.", True
+def todo_actions_p2(n_delete, n_forward, checked, todos, todos_p3):
+    try:
+        print(f"[DEBUG] todo_actions_p2 fired: checked={checked}, todos={len(todos) if todos else 0}, todos_p3={len(todos_p3) if todos_p3 else 0}", flush=True)
+        if not todos:
+            return no_update, no_update, "항목이 없습니다.", True
 
-    triggered = ctx.triggered_id
-    todos = [dict(t) for t in todos]
+        triggered = ctx.triggered_id
+        print(f"[DEBUG] triggered={triggered}", flush=True)
+        todos = [dict(t) for t in todos]
 
-    # 전달 버튼은 체크 없으면 전체 active 항목 전달
-    if triggered == "btn-todo-forward":
-        if checked:
-            targets = checked
+        # 전달 버튼은 체크 없으면 전체 active 항목 전달
+        if triggered == "btn-todo-forward":
+            import copy
+            todos_p3 = list(todos_p3 or [])
+            # checked 인덱스를 정수로 변환
+            checked_ints = [int(c) for c in checked] if checked else []
+            target_indices = set(checked_ints) if checked_ints else {i for i, t in enumerate(todos) if t.get("status") == "active"}
+            if not target_indices:
+                return no_update, no_update, "전달할 항목이 없습니다.", True
+            # store-todos-p3에 독립 복사본 추가 (중복 제외)
+            existing_ids = {t.get("id","") for t in todos_p3}
+            new_items = []
+            for i in sorted(target_indices):
+                if 0 <= i < len(todos):
+                    t = todos[i]
+                    if t.get("id","") not in existing_ids:
+                        new_t = copy.deepcopy(t)
+                        new_t["status"] = "active"
+                        new_t["forwarded"] = True
+                        new_items.append(new_t)
+                        existing_ids.add(new_t.get("id",""))
+            todos_p3.extend(new_items)
+            # store-todos에서 전달된 항목 완전 제거 (단방향 소통)
+            todos = [t for i, t in enumerate(todos) if i not in target_indices]
+            return todos, todos_p3, f"{len(new_items)}개 항목을 전체 TODO로 전달했습니다.", True
+
+        # 삭제는 체크 필수
+        if not checked:
+            return no_update, no_update, "항목을 선택하세요.", True
+
+        checked_ints = [int(c) for c in checked]
+        if triggered == "btn-todo-delete":
+            for i in checked_ints:
+                todos[i]["status"] = "deleted"
+                if todos[i].get("notion_page_id"):
+                    todos[i]["pending_sync"] = True
+            msg = f"{len(checked_ints)}개 삭제됨"
         else:
-            targets = [i for i, t in enumerate(todos) if t.get("status") == "active"]
-        if not targets:
-            return no_update, "전달할 항목이 없습니다.", True
-        for i in targets:
-            todos[i]["forwarded"] = True
-        return todos, f"{len(targets)}개 전체 TODO로 전달됨", True
+            return no_update, no_update, "", False
 
-    # 삭제는 체크 필수
-    if not checked:
-        return no_update, "항목을 선택하세요.", True
-
-    if triggered == "btn-todo-delete":
-        for i in checked:
-            todos[i]["status"] = "deleted"
-            if todos[i].get("notion_page_id"):
-                todos[i]["pending_sync"] = True
-        msg = f"{len(checked)}개 삭제됨"
-    else:
-        return no_update, "", False
-
-    return todos, msg, True
+        return todos, no_update, msg, True
+    except Exception as e:
+        return no_update, no_update, f"오류: {traceback.format_exc()}", True
 
 
 # ── Page 2: Trash actions ─────────────────────────────────────────────────────
@@ -1320,22 +1580,25 @@ def trash_actions_p2(n_restore, n_perm, checked, todos, notion_key, notion_db):
 
     triggered = ctx.triggered_id
     todos = [dict(t) for t in todos]
+    checked_ints = [int(c) for c in checked]
 
     if triggered == "btn-todo-restore":
-        for i in checked:
+        for i in checked_ints:
             todos[i]["status"] = "active"
-        return todos, f"{len(checked)}개 복구됨", True
+            todos[i]["forwarded"] = False
+        return todos, f"{len(checked_ints)}개 복구됨", True
     elif triggered == "btn-todo-perm-delete":
         if notion_key and notion_db:
-            page_ids = [todos[i]["notion_page_id"] for i in checked if todos[i].get("notion_page_id")]
+            page_ids = [todos[i]["notion_page_id"] for i in checked_ints if todos[i].get("notion_page_id")]
             if page_ids:
                 try:
                     from notion_sync import NotionSync
                     NotionSync(notion_key, notion_db).archive_pages(page_ids)
                 except Exception as e:
                     logger.warning(f"Notion 아카이브 실패: {e}")
-        todos = [t for i, t in enumerate(todos) if i not in checked]
-        return todos, f"{len(checked)}개 영구삭제됨", True
+        checked_set = set(checked_ints)
+        todos = [t for i, t in enumerate(todos) if i not in checked_set]
+        return todos, f"{len(checked_ints)}개 영구삭제됨", True
 
     return no_update, "", False
 
@@ -1420,7 +1683,7 @@ def _render_todo_item_p3(todo, idx, list_type="active"):
             dbc.Col(
                 dbc.Button(
                     html.I(className="bi bi-chevron-down"),
-                    id={"type": "todo-toggle-p3", "index": idx},
+                    id={"type": "todo-toggle-p3", "index": idx, "st": status},
                     size="sm", color="link", className="p-0 text-muted",
                     style={"fontSize": "var(--fs-meta)", "lineHeight": "1"},
                 ),
@@ -1434,14 +1697,14 @@ def _render_todo_item_p3(todo, idx, list_type="active"):
                 html.Div(summary or "요약 없음", className="small",
                          style={"whiteSpace": "pre-wrap", "color": "#555"}),
             ], className="pt-1 pb-2 ps-4"),
-            id={"type": "todo-collapse-p3", "index": idx},
+            id={"type": "todo-collapse-p3", "index": idx, "st": status},
             is_open=False,
         ),
     ], className="todo-item px-2 pt-1 border-bottom")
 
 
 def _get_filtered_sorted(todos, filter_val, sort_val, statuses):
-    items = [(i, t) for i, t in enumerate(todos) if t.get("status") in statuses and t.get("forwarded", False)]
+    items = [(i, t) for i, t in enumerate(todos) if t.get("status") in statuses]
     if filter_val and filter_val != "all":
         items = [(i, t) for i, t in items if t.get("priority") == filter_val]
     priority_order = {"높음": 0, "보통": 1, "낮음": 2}
@@ -1456,7 +1719,7 @@ def _get_filtered_sorted(todos, filter_val, sort_val, statuses):
     Output("p3-active-list", "children"),
     Output("p3-completed-list", "children"),
     Output("p3-trash-list", "children"),
-    Input("store-todos", "data"),
+    Input("store-todos-p3", "data"),
     Input("p3-priority-filter", "value"),
     Input("p3-sort-combo", "value"),
     Input("store-page", "data"),
@@ -1510,7 +1773,7 @@ def select_all_p3_trash(checked):
 @app.callback(
     Output("store-todo-checked-p3-active", "data"),
     Input({"type": "todo-cb-p3-active", "index": ALL}, "value"),
-    State("store-todos", "data"),
+    State("store-todos-p3", "data"),
     State("p3-priority-filter", "value"),
     State("p3-sort-combo", "value"),
     prevent_initial_call=True,
@@ -1523,7 +1786,7 @@ def update_p3_active_checked(values, todos, filter_val, sort_val):
 @app.callback(
     Output("store-todo-checked-p3-completed", "data"),
     Input({"type": "todo-cb-p3-completed", "index": ALL}, "value"),
-    State("store-todos", "data"),
+    State("store-todos-p3", "data"),
     State("p3-priority-filter", "value"),
     State("p3-sort-combo", "value"),
     prevent_initial_call=True,
@@ -1536,7 +1799,7 @@ def update_p3_completed_checked(values, todos, filter_val, sort_val):
 @app.callback(
     Output("store-todo-checked-p3-trash", "data"),
     Input({"type": "todo-cb-p3-trash", "index": ALL}, "value"),
-    State("store-todos", "data"),
+    State("store-todos-p3", "data"),
     State("p3-priority-filter", "value"),
     State("p3-sort-combo", "value"),
     prevent_initial_call=True,
@@ -1546,15 +1809,27 @@ def update_p3_trash_checked(values, todos, filter_val, sort_val):
     return [items[i][0] for i, v in enumerate(values) if v and i < len(items)]
 
 
+# ── Page 3: Notion 버튼 활성화/비활성화 ──────────────────────────────────────
+@app.callback(
+    Output("p3-btn-notion-sync", "disabled"),
+    Output("p3-btn-notion-sync", "title"),
+    Input("store-notion-enabled", "data"),
+)
+def toggle_notion_btn(notion_enabled):
+    if notion_enabled:
+        return False, ""
+    return True, "Page 1에서 Notion 연동을 활성화하세요."
+
+
 # ── Page 3: Notion sync ───────────────────────────────────────────────────────
 @app.callback(
     Output("p3-toast", "children", allow_duplicate=True),
     Output("p3-toast", "is_open", allow_duplicate=True),
-    Output("store-todos", "data", allow_duplicate=True),
+    Output("store-todos-p3", "data", allow_duplicate=True),
     Output("store-notion-db-id", "data"),
     Output("p3-notion-sync-status", "children"),
     Input("p3-btn-notion-sync", "n_clicks"),
-    State("store-todos", "data"),
+    State("store-todos-p3", "data"),
     State("store-todo-checked-p3-active", "data"),
     State("store-notion-key", "data"),
     State("store-notion-db", "data"),
@@ -1570,7 +1845,7 @@ def sync_to_notion(n, todos, checked, notion_key, notion_db):
     if checked:
         target = [todos[i] for i in checked if i < len(todos) and not todos[i].get("notion_page_id")]
     else:
-        target = [t for t in todos if t.get("forwarded") and not t.get("notion_page_id")]
+        target = [t for t in todos if not t.get("notion_page_id")]
 
     if not target:
         return "동기화할 항목이 없습니다.", True, no_update, no_update, no_update
@@ -1597,11 +1872,11 @@ def sync_to_notion(n, todos, checked, notion_key, notion_db):
 
 # ── Page 3: Notion polling ────────────────────────────────────────────────────
 @app.callback(
-    Output("store-todos", "data", allow_duplicate=True),
+    Output("store-todos-p3", "data", allow_duplicate=True),
     Output("store-notion-db-id", "data", allow_duplicate=True),
     Output("p3-notion-sync-status", "children", allow_duplicate=True),
     Input("notion-poll-interval", "n_intervals"),
-    State("store-todos", "data"),
+    State("store-todos-p3", "data"),
     State("store-notion-key", "data"),
     State("store-notion-db", "data"),
     State("store-notion-db-id", "data"),
@@ -1612,7 +1887,7 @@ def poll_notion(n_intervals, todos, notion_key, notion_db, db_id):
         return no_update, no_update, no_update
 
     todos = todos or []
-    forwarded = [t for t in todos if t.get("forwarded")]
+    forwarded = list(todos)
     if not forwarded:
         return no_update, no_update, no_update
 
@@ -1637,7 +1912,7 @@ def poll_notion(n_intervals, todos, notion_key, notion_db, db_id):
                 todo.pop("pending_sync", None)
 
         # ── 2. 새 forwarded 항목 Notion에 생성 ────────────────────────
-        new_items = [t for t in updated_todos if t.get("forwarded") and not t.get("notion_page_id")]
+        new_items = [t for t in updated_todos if not t.get("notion_page_id")]
         if new_items:
             _, _, id_map, resolved_db_id = syncer.sync_all_todos(new_items)
             db_id = resolved_db_id
@@ -1668,7 +1943,7 @@ def poll_notion(n_intervals, todos, notion_key, notion_db, db_id):
 
 # ── Page 3: Todo actions ──────────────────────────────────────────────────────
 @app.callback(
-    Output("store-todos", "data", allow_duplicate=True),
+    Output("store-todos-p3", "data", allow_duplicate=True),
     Output("p3-toast", "children"),
     Output("p3-toast", "is_open"),
     Input("p3-btn-complete", "n_clicks"),
@@ -1680,7 +1955,7 @@ def poll_notion(n_intervals, todos, notion_key, notion_db, db_id):
     State("store-todo-checked-p3-active", "data"),
     State("store-todo-checked-p3-completed", "data"),
     State("store-todo-checked-p3-trash", "data"),
-    State("store-todos", "data"),
+    State("store-todos-p3", "data"),
     State("store-notion-key", "data"),
     State("store-notion-db", "data"),
     prevent_initial_call=True,
@@ -1743,6 +2018,40 @@ def todo_actions_p3(n_complete, n_delete, n_uncomplete, n_del_comp, n_restore, n
 
 
 
+# ── Cloud Sync: Todos ─────────────────────────────────────────────────────────
+@app.callback(
+    Output("p3-toast", "style"), # dummy output
+    Input("store-todos", "data"),
+    State("store-account", "data"),
+    State("store-uid", "data"),
+    State("store-auth-token", "data"),
+    prevent_initial_call=True,
+)
+def sync_todos_to_cloud(todos, account, uid, id_token):
+    if account and uid and id_token and todos is not None:
+        try:
+            fb_client.save_data(uid, id_token, "todos", account.replace(".", "_"), {"todos": todos})
+        except Exception as e:
+            print(f"Todo 클라우드 동기화 에러: {e}")
+    return no_update
+
+
+@app.callback(
+    Output("store-notion-enabled", "data", allow_duplicate=True), # dummy output
+    Input("store-todos-p3", "data"),
+    State("store-account", "data"),
+    State("store-uid", "data"),
+    State("store-auth-token", "data"),
+    prevent_initial_call=True,
+)
+def sync_todos_p3_to_cloud(todos, account, uid, id_token):
+    if account and uid and id_token and todos is not None:
+        try:
+            fb_client.save_data(uid, id_token, "todos-p3", account.replace(".", "_"), {"todos": todos})
+        except Exception as e:
+            print(f"Todo P3 클라우드 동기화 에러: {e}")
+    return no_update
+
 # ── Page 3: Edit modal ────────────────────────────────────────────────────────
 @app.callback(
     Output("edit-modal", "is_open"),
@@ -1753,7 +2062,7 @@ def todo_actions_p3(n_complete, n_delete, n_uncomplete, n_del_comp, n_restore, n
     Output("edit-due-date", "date"),
     Input("p3-btn-edit", "n_clicks"),
     State("store-todo-checked-p3-active", "data"),
-    State("store-todos", "data"),
+    State("store-todos-p3", "data"),
     prevent_initial_call=True,
 )
 def open_edit_modal(n, checked, todos):
@@ -1781,7 +2090,7 @@ def toggle_due_date(checked):
 
 
 @app.callback(
-    Output("store-todos", "data", allow_duplicate=True),
+    Output("store-todos-p3", "data", allow_duplicate=True),
     Output("edit-modal", "is_open", allow_duplicate=True),
     Input("btn-edit-save", "n_clicks"),
     State("edit-target-id", "data"),
@@ -1789,7 +2098,7 @@ def toggle_due_date(checked):
     State("edit-todo-priority", "value"),
     State("edit-due-date-cb", "value"),
     State("edit-due-date", "date"),
-    State("store-todos", "data"),
+    State("store-todos-p3", "data"),
     prevent_initial_call=True,
 )
 def save_edit(n, target_id, text, priority, has_due, due_date, todos):
@@ -1815,8 +2124,42 @@ def close_edit_modal(n):
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    def open_browser():
+def _create_tray_icon():
+    from PIL import Image
+    import pystray
+
+    if getattr(sys, 'frozen', False):
+        icon_path = os.path.join(sys._MEIPASS, 'assets', 'icon.png')
+    else:
+        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets', 'icon.png')
+
+    image = Image.open(icon_path)
+
+    def on_open(icon, item):
         webbrowser.open("http://localhost:8050")
-    threading.Timer(1.5, open_browser).start()
-    app.run(debug=False, port=8050)
+
+    def on_quit(icon, item):
+        icon.stop()
+        os._exit(0)
+
+    menu = pystray.Menu(
+        pystray.MenuItem("열기 (브라우저)", on_open),
+        pystray.MenuItem("종료", on_quit),
+    )
+    return pystray.Icon("Email AI Summarizer", image, "Email AI Summarizer", menu)
+
+
+if __name__ == "__main__":
+    # Dash 서버를 백그라운드 스레드에서 실행
+    server_thread = threading.Thread(
+        target=lambda: app.run(debug=False, port=8050),
+        daemon=True,
+    )
+    server_thread.start()
+
+    # 1.5초 후 브라우저 자동 오픈
+    threading.Timer(1.5, lambda: webbrowser.open("http://localhost:8050")).start()
+
+    # 시스템 트레이 아이콘을 메인 스레드에서 실행 (Windows 필수)
+    tray = _create_tray_icon()
+    tray.run()

@@ -24,6 +24,7 @@ a = Analysis(
         ('outlook_manager.py',                       '.'),
         ('ai_processor.py',                          '.'),
         ('notion_sync.py',                           '.'),
+        ('.env',                                         '.'),
     ],
     hiddenimports=[
         'dash',
@@ -40,6 +41,9 @@ a = Analysis(
         'notion_sync',
         'ai_processor',
         'outlook_manager',
+        'pystray',
+        'PIL',
+        'PIL.Image',
     ],
     hookspath=[],
     hooksconfig={},
