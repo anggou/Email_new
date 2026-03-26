@@ -40,55 +40,62 @@ class OutlookManager:
                     acc = namespace.Accounts.Item(i)
                     email = getattr(acc, "SmtpAddress", "") or getattr(acc, "DisplayName", "")
                     if email == account_email:
+                        # DeliveryStore → 계정별 실제 받은편지함 (Exchange/로컬 모두 지원)
                         try:
-                            inbox = acc.DeliveryStore.GetDefaultFolder(6)
+                            store = acc.DeliveryStore
+                            inbox = store.GetDefaultFolder(6)
+                            self.logger.info(f"DeliveryStore inbox 접근 성공: {email}")
                         except Exception as inner_e:
-                            self.logger.warning(f"DeliveryStore 접근 실패: {inner_e}")
+                            self.logger.warning(f"DeliveryStore 접근 실패, 폴더 직접 탐색 시도: {inner_e}")
+                            # 폴더 직접 탐색: Stores에서 해당 계정 store 찾기
+                            try:
+                                for j in range(1, namespace.Stores.Count + 1):
+                                    store = namespace.Stores.Item(j)
+                                    store_display = getattr(store, "DisplayName", "")
+                                    if account_email in store_display or store_display in account_email:
+                                        inbox = store.GetDefaultFolder(6)
+                                        self.logger.info(f"Stores 탐색으로 inbox 접근 성공: {store_display}")
+                                        break
+                            except Exception as e2:
+                                self.logger.warning(f"Stores 탐색 실패: {e2}")
                         break
-            
+
             if not inbox:
+                self.logger.warning("계정별 inbox 접근 실패, 기본 받은편지함 사용")
                 inbox = namespace.GetDefaultFolder(6)
                 
             messages = inbox.Items
-            messages.Sort("[ReceivedTime]", True)
+
+            # Restrict 필터로 날짜 범위 직접 쿼리 (Exchange Online에서도 안정적)
+            if target_date:
+                start_dt = datetime.datetime.combine(target_date, datetime.time.min)
+                end_dt   = datetime.datetime.combine(
+                    target_date + datetime.timedelta(days=1), datetime.time.min
+                )
+                filter_str = (
+                    f"[ReceivedTime] >= '{start_dt.strftime('%m/%d/%Y %I:%M %p')}' AND "
+                    f"[ReceivedTime] < '{end_dt.strftime('%m/%d/%Y %I:%M %p')}'"
+                )
+                messages = messages.Restrict(filter_str)
 
             fetched_emails = []
-            
             for message in messages:
                 try:
-                    msg_date = getattr(message, "ReceivedTime", None)
-                    if not msg_date:
-                        continue
-                        
-                    # Outlook ReceivedTime은 pywintypes.datetime이므로 파이썬 date객체와 비교
-                    msg_date_only = msg_date.date()
-                    
-                    if target_date and msg_date_only > target_date:
-                        # 타겟 날짜보다 최신 메일은 건너뜀 (내림차순 정렬이므로)
-                        continue
-                    elif target_date and msg_date_only < target_date:
-                        # 그룹 지어있는 날짜 이하로 떨어지면 탐색 종료
+                    email_data = {
+                        "subject":       getattr(message, "Subject", "제목 없음"),
+                        "sender":        getattr(message, "SenderName", "알 수 없는 발신자"),
+                        "sender_email":  getattr(message, "SenderEmailAddress", ""),
+                        "to_recipients": getattr(message, "To", ""),
+                        "cc_recipients": getattr(message, "CC", ""),
+                        "body":          getattr(message, "Body", ""),
+                        "entry_id":      getattr(message, "EntryID", "")
+                    }
+                    fetched_emails.append(email_data)
+                    if len(fetched_emails) >= limit:
                         break
-                        
-                    # 타겟 날짜와 정확히 일치하는 경우(또는 target_date가 없는경우 전체)
-                    if not target_date or msg_date_only == target_date:
-                        email_data = {
-                            "subject":       getattr(message, "Subject", "제목 없음"),
-                            "sender":        getattr(message, "SenderName", "알 수 없는 발신자"),
-                            "sender_email":  getattr(message, "SenderEmailAddress", ""),
-                            "to_recipients": getattr(message, "To", ""),
-                            "cc_recipients": getattr(message, "CC", ""),
-                            "body":          getattr(message, "Body", ""),
-                            "entry_id":      getattr(message, "EntryID", "")
-                        }
-                        fetched_emails.append(email_data)
-                        
-                        if len(fetched_emails) >= limit:
-                            break
-                            
-                except Exception as ex:
+                except Exception:
                     pass
-                        
+
             return fetched_emails
             
         except Exception as e:

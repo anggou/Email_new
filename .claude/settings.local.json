@@ -2,7 +2,27 @@
   "permissions": {
     "allow": [
       "Read(//c/Users/oldba/.claude//**)",
-      "Bash(python -m py_compile app.py)"
+      "Bash(python -m py_compile app.py)",
+      "Bash(git:*)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''app.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''Syntax OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''app.py''\\).read\\(\\)\\); print\\(''문법 OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''app.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''문법 OK''\\)\")",
+      "Bash(pip show:*)",
+      "Bash(pip install:*)",
+      "Bash(python -c \"import dash; import os; print\\(os.path.dirname\\(dash.__file__\\)\\)\")",
+      "Bash(where python:*)",
+      "Bash(py -3.9 --version)",
+      "Bash(py -3.10 --version)",
+      "Bash(py -3.11 --version)",
+      "Bash(py -3.12 --version)",
+      "Bash(py -3.9 -m pip show dash google-genai diskcache)",
+      "Bash(py -3.9 -m pip show pyinstaller)",
+      "Bash(py -3.9 -m pip install pyinstaller)",
+      "Bash(py:*)",
+      "Bash(taskkill /F /IM python.exe)",
+      "Bash(Get-Process python*)",
+      "Bash(Select-Object Name,Id)",
+      "Bash(curl -s http://127.0.0.1:8050/_dash-dependencies)"
     ]
   }
 }
