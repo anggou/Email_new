@@ -24,6 +24,7 @@ a = Analysis(
         ('outlook_manager.py',                       '.'),
         ('ai_processor.py',                          '.'),
         ('notion_sync.py',                           '.'),
+        ('firebase_client.py',                       '.'),
         ('.env',                                         '.'),
     ],
     hiddenimports=[
@@ -77,5 +78,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='assets/favicon.ico',
+    icon='assets/icon.ico',
 )

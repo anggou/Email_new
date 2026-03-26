@@ -97,9 +97,22 @@ class OutlookManager:
                     pass
 
             return fetched_emails
-            
+
         except Exception as e:
             self.logger.error(f"Outlook 연동 중 오류 발생: {e}")
             raise Exception(f"Outlook 메일박스 연동 중 오류 발생: {e}")
+        finally:
+            pythoncom.CoUninitialize()
+
+    def open_email_by_entry_id(self, entry_id: str):
+        """EntryID로 Outlook에서 해당 메일을 열어 표시합니다."""
+        pythoncom.CoInitialize()
+        try:
+            outlook = win32com.client.Dispatch("Outlook.Application")
+            mail = outlook.Session.GetItemFromID(entry_id)
+            mail.Display()
+        except Exception as e:
+            self.logger.error(f"메일 열기 실패: {e}")
+            raise Exception(f"메일을 열 수 없습니다: {e}")
         finally:
             pythoncom.CoUninitialize()

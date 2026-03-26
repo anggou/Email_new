@@ -570,6 +570,7 @@ def page3_layout():
             is_open=False,
             dismissable=True,
             duration=3000,
+            color="primary",
             style={"position": "fixed", "bottom": 16, "left": 16, "zIndex": 9999},
         ),
     ])
@@ -603,6 +604,7 @@ app.layout = html.Div([
     dcc.Store(id="store-notion-db", data=""),
     dcc.Store(id="store-notion-db-id", data=""),
     dcc.Store(id="store-perm-deleted-ids", storage_type="local", data=[]),
+    dcc.Store(id="store-notion-archive-queue", storage_type="local", data=[]),
     dcc.Interval(id="notion-poll-interval", interval=60*1000, n_intervals=0, disabled=False),
 
     # Pages
@@ -1236,6 +1238,7 @@ def _run_analysis_thread(checked_indices, emails, user_profile, api_key, existin
                 "text": text,
                 "summary": summary,
                 "email_subject": email.get("subject", ""),
+                "entry_id": email.get("entry_id", ""),
                 "status": "active",
                 "forwarded": False,
                 "due_date": "",
@@ -1484,6 +1487,36 @@ def toggle_todo_p2(n, is_open):
 )
 def toggle_todo_p3(n, is_open):
     return not is_open
+
+
+# ── Page 3: Open original email in Outlook ────────────────────────────────────
+@app.callback(
+    Output("p3-toast", "children", allow_duplicate=True),
+    Output("p3-toast", "is_open", allow_duplicate=True),
+    Output("p3-toast", "color", allow_duplicate=True),
+    Input({"type": "btn-open-email-p3", "index": ALL}, "n_clicks"),
+    State("store-todos-p3", "data"),
+    prevent_initial_call=True,
+)
+def open_original_email_p3(n_clicks_list, todos):
+    if not any(n for n in (n_clicks_list or []) if n):
+        return no_update, no_update, no_update
+    triggered = ctx.triggered_id
+    if not triggered:
+        return no_update, no_update, no_update
+    idx = triggered["index"]
+    if not todos or idx >= len(todos):
+        return "메일 정보를 찾을 수 없습니다.", True, "danger"
+    entry_id = todos[idx].get("entry_id", "")
+    if not entry_id:
+        return "이 TODO는 원본 메일 정보가 없습니다. (재분석 필요)", True, "warning"
+    try:
+        from outlook_manager import OutlookManager
+        mgr = OutlookManager()
+        mgr.open_email_by_entry_id(entry_id)
+        return no_update, no_update, no_update
+    except Exception as e:
+        return str(e), True, "danger"
 
 
 # ── Page 2: Render Todo lists ─────────────────────────────────────────────────
@@ -1835,6 +1868,7 @@ def _render_todo_item_p3(todo, idx, list_type="active"):
     subject = todo.get("email_subject", "")
     summary = todo.get("summary", "")
     status = todo.get("status", "active")
+    entry_id = todo.get("entry_id", "")
 
     text_style = {}
     if status == "completed":
@@ -1853,10 +1887,21 @@ def _render_todo_item_p3(todo, idx, list_type="active"):
                     html.Span(text[:70] + ("…" if len(text) > 70 else ""),
                                className="small", style=text_style),
                 ]),
-                html.Span(
-                    f"출처: {subject[:30]}" + (f" | 마감: {due_date}" if due_date else ""),
-                    style={"fontSize": "var(--fs-xs)", "color": "#888"},
-                ),
+                html.Div([
+                    html.Span(
+                        f"출처: {subject[:30]}" + (f" | 마감: {due_date}" if due_date else ""),
+                        style={"fontSize": "var(--fs-xs)", "color": "#888"},
+                    ),
+                    dbc.Button(
+                        "원본메일",
+                        id={"type": "btn-open-email-p3", "index": idx},
+                        size="sm",
+                        color="link",
+                        className="p-0 ms-2",
+                        style={"fontSize": "var(--fs-xs)", "verticalAlign": "baseline"},
+                        disabled=not entry_id,
+                    ),
+                ], className="d-flex align-items-center"),
             ]),
             dbc.Col(
                 dbc.Button(
@@ -1999,53 +2044,99 @@ def toggle_notion_btn(notion_enabled):
     return True, "Page 1에서 Notion 연동을 활성화하세요."
 
 
-# ── Page 3: Notion sync ───────────────────────────────────────────────────────
+# ── Page 3: Notion 수동 동기화 (poll과 동일한 로직) ──────────────────────────
 @app.callback(
     Output("p3-toast", "children", allow_duplicate=True),
     Output("p3-toast", "is_open", allow_duplicate=True),
     Output("store-todos-p3", "data", allow_duplicate=True),
-    Output("store-notion-db-id", "data"),
-    Output("p3-notion-sync-status", "children"),
+    Output("store-notion-db-id", "data", allow_duplicate=True),
+    Output("p3-notion-sync-status", "children", allow_duplicate=True),
+    Output("store-notion-archive-queue", "data", allow_duplicate=True),
     Input("p3-btn-notion-sync", "n_clicks"),
     State("store-todos-p3", "data"),
-    State("store-todo-checked-p3-active", "data"),
     State("store-notion-key", "data"),
     State("store-notion-db", "data"),
+    State("store-notion-db-id", "data"),
+    State("store-perm-deleted-ids", "data"),
+    State("store-notion-archive-queue", "data"),
     prevent_initial_call=True,
 )
-def sync_to_notion(n, todos, checked, notion_key, notion_db):
+def sync_to_notion(n, todos, notion_key, notion_db, db_id, perm_deleted_ids, archive_queue):
     if not notion_key:
-        return "Notion API 키가 없습니다. Page 1에서 입력 후 다시 시작해주세요.", True, no_update, no_update, no_update
+        return "Notion API 키가 없습니다. Page 1에서 입력 후 다시 시작해주세요.", True, no_update, no_update, no_update, no_update
     if not notion_db:
-        return "Notion 페이지 URL이 없습니다. Page 1에서 입력 후 다시 시작해주세요.", True, no_update, no_update, no_update
+        return "Notion 페이지 URL이 없습니다. Page 1에서 입력 후 다시 시작해주세요.", True, no_update, no_update, no_update, no_update
 
-    todos = todos or []
-    if checked:
-        target = [todos[i] for i in checked if i < len(todos) and not todos[i].get("notion_page_id")]
-    else:
-        target = [t for t in todos if not t.get("notion_page_id")]
+    perm_deleted_set = set(perm_deleted_ids or [])
+    todos = [t for t in (todos or []) if t.get("id") not in perm_deleted_set]
+    archive_queue = list(archive_queue or [])
 
-    if not target:
-        return "동기화할 항목이 없습니다.", True, no_update, no_update, no_update
+    if not todos and not archive_queue:
+        return "동기화할 항목이 없습니다.", True, no_update, no_update, no_update, no_update
 
     try:
         from notion_sync import NotionSync
         syncer = NotionSync(api_key=notion_key, parent_page_id=notion_db)
-        success, failed, id_map, db_id = syncer.sync_all_todos(target)
+        if db_id:
+            syncer._db_id = db_id
 
-        updated_todos = list(todos)
-        for todo in updated_todos:
-            if todo.get("id") in id_map:
-                todo["notion_page_id"] = id_map[todo["id"]]
+        # ── 0. 아카이브 큐 처리 ───────────────────────────────────────────
+        if archive_queue:
+            remaining = []
+            for page_id in archive_queue:
+                try:
+                    syncer.archive_page(page_id)
+                except Exception:
+                    remaining.append(page_id)
+            archive_queue = remaining
 
+        updated_todos = [dict(t) for t in todos]
         now = datetime.now().strftime("%H:%M")
-        if failed:
-            return f"Notion 동기화 실패: {failed[0]}", True, no_update, no_update, no_update
+        pushed_ids = set()
 
-        return (f"Notion 동기화 완료: {success}건 저장됨", True,
-                updated_todos, db_id, f"Notion 연동 중 · 마지막 동기화: {now}")
+        # ── 1. 앱→Notion: pending_sync 항목 상태 push ────────────────────
+        for todo in updated_todos:
+            if todo.get("pending_sync") and todo.get("notion_page_id"):
+                try:
+                    syncer.update_page_status(todo["notion_page_id"], todo["status"])
+                    pushed_ids.add(todo["id"])
+                except Exception as e:
+                    logger.warning(f"Notion 상태 push 실패: {e}")
+                todo.pop("pending_sync", None)
+
+        # ── 2. 새 항목 Notion에 생성 ─────────────────────────────────────
+        new_items = [t for t in updated_todos if not t.get("notion_page_id")]
+        new_count = 0
+        if new_items:
+            _, _, id_map, resolved_db_id = syncer.sync_all_todos(new_items)
+            db_id = resolved_db_id
+            new_count = len(id_map)
+            for todo in updated_todos:
+                if todo.get("id") in id_map:
+                    todo["notion_page_id"] = id_map[todo["id"]]
+
+        # ── 3. Notion→앱: 상태 pull ──────────────────────────────────────
+        notion_id_to_todo_id = {
+            t["notion_page_id"]: t["id"]
+            for t in updated_todos
+            if t.get("notion_page_id") and t["id"] not in pushed_ids
+        }
+        pull_count = 0
+        if notion_id_to_todo_id:
+            if not db_id:
+                db_id = syncer.get_or_create_db()
+            syncer._db_id = db_id
+            changes = syncer.fetch_status_changes(db_id, notion_id_to_todo_id)
+            for todo in updated_todos:
+                if todo.get("id") in changes:
+                    todo["status"] = changes[todo["id"]]
+            pull_count = len(changes)
+
+        msg = f"동기화 완료 · 신규 {new_count}건 · 상태변경 {pull_count}건 ({now})"
+        return msg, True, updated_todos, db_id, f"Notion 연동 중 · 마지막 동기화: {now}", archive_queue
+
     except Exception as e:
-        return f"Notion 오류: {e}", True, no_update, no_update, no_update
+        return f"Notion 오류: {e}", True, no_update, no_update, no_update, no_update
 
 
 # ── Page 3: Notion polling ────────────────────────────────────────────────────
@@ -2053,29 +2144,43 @@ def sync_to_notion(n, todos, checked, notion_key, notion_db):
     Output("store-todos-p3", "data", allow_duplicate=True),
     Output("store-notion-db-id", "data", allow_duplicate=True),
     Output("p3-notion-sync-status", "children", allow_duplicate=True),
+    Output("store-notion-archive-queue", "data", allow_duplicate=True),
     Input("notion-poll-interval", "n_intervals"),
     State("store-todos-p3", "data"),
     State("store-notion-key", "data"),
     State("store-notion-db", "data"),
     State("store-notion-db-id", "data"),
     State("store-perm-deleted-ids", "data"),
+    State("store-notion-archive-queue", "data"),
     prevent_initial_call=True,
 )
-def poll_notion(n_intervals, todos, notion_key, notion_db, db_id, perm_deleted_ids):
+def poll_notion(n_intervals, todos, notion_key, notion_db, db_id, perm_deleted_ids, archive_queue):
     if not notion_key or not notion_db:
-        return no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update
 
     perm_deleted_set = set(perm_deleted_ids or [])
     todos = [t for t in (todos or []) if t.get("id") not in perm_deleted_set]
     forwarded = list(todos)
-    if not forwarded:
-        return no_update, no_update, no_update
+    archive_queue = list(archive_queue or [])
 
     try:
         from notion_sync import NotionSync
         syncer = NotionSync(api_key=notion_key, parent_page_id=notion_db)
         if db_id:
             syncer._db_id = db_id
+
+        # ── 0. 아카이브 큐 처리: 영구 삭제된 Notion 페이지 재시도 ──────────
+        if archive_queue:
+            remaining = []
+            for page_id in archive_queue:
+                try:
+                    syncer.archive_page(page_id)
+                except Exception:
+                    remaining.append(page_id)
+            archive_queue = remaining
+
+        if not forwarded:
+            return no_update, no_update, no_update, archive_queue
 
         updated_todos = [dict(t) for t in todos]
         now = datetime.now().strftime("%H:%M")
@@ -2115,18 +2220,19 @@ def poll_notion(n_intervals, todos, notion_key, notion_db, db_id, perm_deleted_i
                 if todo.get("id") in changes:
                     todo["status"] = changes[todo["id"]]
 
-        return updated_todos, db_id, f"Notion 연동 중 · 마지막 확인: {now}"
+        return updated_todos, db_id, f"Notion 연동 중 · 마지막 확인: {now}", archive_queue
     except Exception as e:
         logger.error(f"Notion 폴링 오류: {e}")
-        return no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update
 
 
 # ── Page 3: Todo actions ──────────────────────────────────────────────────────
 @app.callback(
     Output("store-todos-p3", "data", allow_duplicate=True),
-    Output("p3-toast", "children"),
-    Output("p3-toast", "is_open"),
+    Output("p3-toast", "children", allow_duplicate=True),
+    Output("p3-toast", "is_open", allow_duplicate=True),
     Output("store-perm-deleted-ids", "data", allow_duplicate=True),
+    Output("store-notion-archive-queue", "data", allow_duplicate=True),
     Input("p3-btn-complete", "n_clicks"),
     Input("p3-btn-delete", "n_clicks"),
     Input("p3-btn-uncomplete", "n_clicks"),
@@ -2140,14 +2246,15 @@ def poll_notion(n_intervals, todos, notion_key, notion_db, db_id, perm_deleted_i
     State("store-notion-key", "data"),
     State("store-notion-db", "data"),
     State("store-perm-deleted-ids", "data"),
+    State("store-notion-archive-queue", "data"),
     prevent_initial_call=True,
 )
 def todo_actions_p3(n_complete, n_delete, n_uncomplete, n_del_comp, n_restore, n_perm,
                     checked_active, checked_completed, checked_trash, todos,
-                    notion_key, notion_db, perm_deleted_ids):
+                    notion_key, notion_db, perm_deleted_ids, archive_queue):
     triggered = ctx.triggered_id
     if not todos:
-        return no_update, "", False, no_update
+        return no_update, "", False, no_update, no_update
 
     todos = [dict(t) for t in todos]
     perm_deleted_ids = list(perm_deleted_ids or [])
@@ -2184,22 +2291,17 @@ def todo_actions_p3(n_complete, n_delete, n_uncomplete, n_del_comp, n_restore, n
         msg = f"{len(checked_trash)}개 복구됨"
     elif triggered == "p3-btn-perm-delete" and checked_trash:
         ids_to_delete = {todos[i]["id"] for i in checked_trash}
-        if notion_key and notion_db:
-            page_ids = [todos[i]["notion_page_id"] for i in checked_trash if todos[i].get("notion_page_id")]
-            if page_ids:
-                threading.Thread(
-                    target=_archive_notion_bg,
-                    args=(notion_key, notion_db, page_ids),
-                    daemon=True
-                ).start()
+        page_ids = [todos[i]["notion_page_id"] for i in checked_trash if todos[i].get("notion_page_id")]
+        # 아카이브 큐에 추가 (실패 시 다음 poll에서 재시도)
+        updated_queue = list(set(list(archive_queue or []) + page_ids))
         todos = [t for t in todos if t["id"] not in ids_to_delete]
         perm_deleted_ids = list(set(perm_deleted_ids) | ids_to_delete)
         msg = f"{len(ids_to_delete)}개 영구 삭제됨"
-        return todos, msg, True, perm_deleted_ids
+        return todos, msg, True, perm_deleted_ids, updated_queue
     else:
-        return no_update, "항목을 선택하세요.", True, no_update
+        return no_update, "항목을 선택하세요.", True, no_update, no_update
 
-    return todos, msg, True, no_update
+    return todos, msg, True, no_update, no_update
 
 
 
