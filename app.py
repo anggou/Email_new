@@ -600,6 +600,7 @@ app.layout = html.Div([
     dcc.Store(id="store-notion-key", data=""),
     dcc.Store(id="store-notion-db", data=""),
     dcc.Store(id="store-notion-db-id", data=""),
+    dcc.Store(id="store-perm-deleted-ids", storage_type="local", data=[]),
     dcc.Interval(id="notion-poll-interval", interval=60*1000, n_intervals=0, disabled=False),
 
     # Pages
@@ -791,17 +792,36 @@ def load_profile(account, uid, id_token):
         safe_acc = account.replace(".", "_")
         try:
             cloud_p = fb_client.get_data(uid, id_token, "profiles", safe_acc)
-            if cloud_p: p = cloud_p
-            # 저장 경로(profile/main) fallback
-            if not p:
+            if cloud_p:
+                p = cloud_p
+            else:
+                # 구버전 마이그레이션: profile/main에서 이 계정 데이터 로드
                 cloud_p_main = fb_client.get_data(uid, id_token, "profile", "main")
-                if cloud_p_main: p = cloud_p_main
+                if cloud_p_main and cloud_p_main.get("email") == account:
+                    p = cloud_p_main
+                    # 새 경로로 자동 마이그레이션
+                    try:
+                        fb_client.save_data(uid, id_token, "profiles", safe_acc, p)
+                    except Exception:
+                        pass
+
             cloud_keys = fb_client.get_data(uid, id_token, "keys", safe_acc)
-            if cloud_keys: keys = cloud_keys
-            # settings/keys fallback
-            if not keys:
+            if cloud_keys:
+                keys = cloud_keys
+            else:
+                # 구버전 마이그레이션: settings/keys에서 로드
                 cloud_keys_main = fb_client.get_data(uid, id_token, "settings", "keys")
-                if cloud_keys_main: keys = cloud_keys_main
+                if cloud_keys_main:
+                    keys = cloud_keys_main
+                    # 새 경로로 자동 마이그레이션
+                    try:
+                        fb_client.save_data(uid, id_token, "keys", safe_acc, {
+                            "gemini": cloud_keys_main.get("gemini_key", ""),
+                            "notion_key": cloud_keys_main.get("notion_key", ""),
+                            "notion_db":  cloud_keys_main.get("notion_db", ""),
+                        })
+                    except Exception:
+                        pass
             cloud_todos = fb_client.get_data(uid, id_token, "todos", safe_acc)
             if cloud_todos and "todos" in cloud_todos: todos_data = cloud_todos["todos"]
             cloud_todos_p3 = fb_client.get_data(uid, id_token, "todos-p3", safe_acc)
@@ -864,8 +884,6 @@ def save_profile(n, account, name, role, lists_data, uid, id_token):
     save_all_profiles(profiles)
 
     if uid and id_token:
-        fb_save_profile(uid, id_token, profile_data)
-        # profiles/{safe_acc} 경로에도 함께 저장 (load_profile과 경로 통일)
         safe_acc = account.replace(".", "_")
         try:
             fb_client.save_data(uid, id_token, "profiles", safe_acc, profile_data)
@@ -997,8 +1015,15 @@ def go_to_page2(n, account, api_key, notion_key, notion_db, notion_open, uid, id
     notion_enabled = bool(notion_open and notion_key and notion_key.strip())
 
     if uid and id_token:
-        fb_save_keys(uid, id_token, api_key.strip(),
-                     (notion_key or "").strip(), (notion_db or "").strip())
+        safe_acc = account.replace(".", "_")
+        try:
+            fb_client.save_data(uid, id_token, "keys", safe_acc, {
+                "gemini": api_key.strip(),
+                "notion_key": (notion_key or "").strip(),
+                "notion_db":  (notion_db or "").strip(),
+            })
+        except Exception as e:
+            logger.warning(f"Firestore 키 저장 실패: {e}")
 
     profiles = load_all_profiles()
     profile = profiles.get(account, {})
@@ -1652,21 +1677,24 @@ def todo_actions_p2(n_delete, n_forward, checked, todos, todos_p3):
     Output("p2-toast", "is_open", allow_duplicate=True),
     Input("btn-todo-restore", "n_clicks"),
     Input("btn-todo-perm-delete", "n_clicks"),
-    State("store-todo-trash-checked-p2", "data"),
+    State({"type": "todo-cb-trash-p2", "index": ALL}, "value"),
     State("store-todos", "data"),
     State("store-notion-key", "data"),
     State("store-notion-db", "data"),
     prevent_initial_call=True,
 )
-def trash_actions_p2(n_restore, n_perm, checked, todos, notion_key, notion_db):
+def trash_actions_p2(n_restore, n_perm, cb_values, todos, notion_key, notion_db):
     if not todos:
         return no_update, "항목이 없습니다.", True
-    if not checked:
+
+    cb_states = ctx.states_list[0]
+    checked_ints = [s["id"]["index"] for s, v in zip(cb_states, cb_values or []) if v]
+
+    if not checked_ints:
         return no_update, "항목을 선택하세요.", True
 
     triggered = ctx.triggered_id
     todos = [dict(t) for t in todos]
-    checked_ints = [int(c) for c in checked]
 
     if triggered == "btn-todo-restore":
         for i in checked_ints:
@@ -1967,13 +1995,15 @@ def sync_to_notion(n, todos, checked, notion_key, notion_db):
     State("store-notion-key", "data"),
     State("store-notion-db", "data"),
     State("store-notion-db-id", "data"),
+    State("store-perm-deleted-ids", "data"),
     prevent_initial_call=True,
 )
-def poll_notion(n_intervals, todos, notion_key, notion_db, db_id):
+def poll_notion(n_intervals, todos, notion_key, notion_db, db_id, perm_deleted_ids):
     if not notion_key or not notion_db:
         return no_update, no_update, no_update
 
-    todos = todos or []
+    perm_deleted_set = set(perm_deleted_ids or [])
+    todos = [t for t in (todos or []) if t.get("id") not in perm_deleted_set]
     forwarded = list(todos)
     if not forwarded:
         return no_update, no_update, no_update
@@ -2033,6 +2063,7 @@ def poll_notion(n_intervals, todos, notion_key, notion_db, db_id):
     Output("store-todos-p3", "data", allow_duplicate=True),
     Output("p3-toast", "children"),
     Output("p3-toast", "is_open"),
+    Output("store-perm-deleted-ids", "data", allow_duplicate=True),
     Input("p3-btn-complete", "n_clicks"),
     Input("p3-btn-delete", "n_clicks"),
     Input("p3-btn-uncomplete", "n_clicks"),
@@ -2045,16 +2076,18 @@ def poll_notion(n_intervals, todos, notion_key, notion_db, db_id):
     State("store-todos-p3", "data"),
     State("store-notion-key", "data"),
     State("store-notion-db", "data"),
+    State("store-perm-deleted-ids", "data"),
     prevent_initial_call=True,
 )
 def todo_actions_p3(n_complete, n_delete, n_uncomplete, n_del_comp, n_restore, n_perm,
                     checked_active, checked_completed, checked_trash, todos,
-                    notion_key, notion_db):
+                    notion_key, notion_db, perm_deleted_ids):
     triggered = ctx.triggered_id
     if not todos:
-        return no_update, "", False
+        return no_update, "", False, no_update
 
     todos = [dict(t) for t in todos]
+    perm_deleted_ids = list(perm_deleted_ids or [])
 
     def _mark_pending(idxs):
         for i in idxs:
@@ -2097,11 +2130,13 @@ def todo_actions_p3(n_complete, n_delete, n_uncomplete, n_del_comp, n_restore, n
                 except Exception as e:
                     logger.warning(f"Notion 아카이브 실패: {e}")
         todos = [t for t in todos if t["id"] not in ids_to_delete]
+        perm_deleted_ids = list(set(perm_deleted_ids) | ids_to_delete)
         msg = f"{len(ids_to_delete)}개 영구 삭제됨"
+        return todos, msg, True, perm_deleted_ids
     else:
-        return no_update, "항목을 선택하세요.", True
+        return no_update, "항목을 선택하세요.", True, no_update
 
-    return todos, msg, True
+    return todos, msg, True, no_update
 
 
 
