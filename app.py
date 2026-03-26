@@ -78,6 +78,7 @@ app = dash.Dash(
     external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.BOOTSTRAP],
     suppress_callback_exceptions=True,
     title="Email AI Summarizer",
+    update_title=None,
 )
 app.index_string = '''<!DOCTYPE html>
 <html>
@@ -99,21 +100,6 @@ app.index_string = '''<!DOCTYPE html>
 server = app.server
 
 # ── Profile helpers ───────────────────────────────────────────────────────────
-PROFILE_FILE = "user_profile.json"
-
-def load_all_profiles():
-    if os.path.exists(PROFILE_FILE):
-        try:
-            with open(PROFILE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
-
-def save_all_profiles(profiles):
-    with open(PROFILE_FILE, "w", encoding="utf-8") as f:
-        json.dump(profiles, f, ensure_ascii=False, indent=2)
-
 def build_user_context(profile):
     if not profile or not profile.get("name"):
         return ""
@@ -138,6 +124,14 @@ def build_user_context(profile):
 
 def split_comma(s):
     return [x.strip() for x in s.split(",") if x.strip()] if s else []
+
+def _archive_notion_bg(notion_key, notion_db, page_ids):
+    """Notion 아카이브를 백그라운드 스레드에서 실행."""
+    try:
+        from notion_sync import NotionSync
+        NotionSync(notion_key, notion_db).archive_pages(page_ids)
+    except Exception as e:
+        logger.warning(f"Notion 백그라운드 아카이브 실패: {e}")
 
 def _pf_list_widget(field, label, placeholder):
     """프로필 항목 추가/삭제 위젯"""
@@ -282,7 +276,13 @@ def page2_layout():
                             dbc.Button("조회", id="btn-refresh", color="primary", size="sm"),
                         ]),
                     ], width="auto"),
-                    dbc.Col(dbc.Button("전체 TODO 관리 →", id="btn-goto-page3",
+                    dbc.Col(dbc.Button([
+                                "전체 TODO 관리 ",
+                                dbc.Badge(id="p3-todo-count-badge", children="", color="light",
+                                          text_color="dark", className="me-1",
+                                          style={"fontSize": "0.7rem", "display": "none"}),
+                                "→",
+                            ], id="btn-goto-page3",
                                        color="secondary", size="sm",
                                        style={"backgroundColor": "#7B1FA2", "borderColor": "#7B1FA2",
                                               "color": "white"}),
@@ -297,17 +297,13 @@ def page2_layout():
                 # Left: Email list + viewer
                 dbc.Col([
                     dbc.Card([
-                        dbc.CardHeader([
-                            dbc.Row([
-                                dbc.Col(html.Span("메일 목록", className="fw-semibold small"), width="auto"),
-                                dbc.Col(
-                                    dbc.Checkbox(id="email-select-all-cb",
-                                                  label=html.Span(["전체선택", html.Span(id="email-select-count", className="text-muted ms-1")]),
-                                                  label_class_name="small ms-1"),
-                                    className="ms-auto", width="auto"),
-                            ], align="center"),
-                        ]),
+                        dbc.CardHeader(html.Span("메일 목록", className="fw-semibold small")),
                         dbc.CardBody([
+                            html.Div([
+                                dbc.Checkbox(id="email-select-all-cb",
+                                              label=html.Span(["전체선택", html.Span(id="email-select-count", className="text-muted ms-1")]),
+                                              label_class_name="small ms-1"),
+                            ], className="px-2 py-1 border-bottom"),
                             html.Div(id="email-list-container",
                                      className="email-list",
                                      children=[html.Span("이메일을 조회하세요.", className="text-muted small p-2 d-block")]),
@@ -476,9 +472,14 @@ def page3_layout():
                                                    color="danger", outline=True, className="me-1"),
                                         dbc.Button("편집", id="p3-btn-edit", size="sm",
                                                    color="primary", outline=True, className="me-1"),
-                                        dbc.Button("Notion 동기화", id="p3-btn-notion-sync", size="sm",
-                                                   style={"backgroundColor": "#000", "borderColor": "#000",
-                                                          "color": "white"}, className="me-1"),
+                                        dbc.Button(
+                                            html.Img(src="/assets/notion.png",
+                                                     style={"width": "18px", "height": "18px"}),
+                                            id="p3-btn-notion-sync", size="sm",
+                                            style={"backgroundColor": "transparent", "borderColor": "#ccc",
+                                                   "padding": "3px 7px"},
+                                            className="me-1",
+                                        ),
                                         html.Span(id="p3-notion-sync-status",
                                                   className="text-muted small align-self-center",
                                                   style={"fontSize": "var(--fs-meta)"}),
@@ -588,6 +589,7 @@ app.layout = html.Div([
     dcc.Store(id="store-selected-email-idx", data=None),
     dcc.Store(id="store-email-checked", data=[]),
     dcc.Store(id="store-todo-checked-p2", data=[]),
+    dcc.Store(id="store-highlighted-emails", data=[]),
     dcc.Store(id="store-todo-trash-checked-p2", data=[]),
     dcc.Store(id="store-todo-checked-p3-active", data=[]),
     dcc.Store(id="store-todo-checked-p3-completed", data=[]),
@@ -778,12 +780,15 @@ def toggle_profile(n, is_open):
     Output("notion-db-input", "value"),
     Output("store-todos", "data", allow_duplicate=True),
     Output("store-todos-p3", "data", allow_duplicate=True),
+    Output("store-user-profile", "data", allow_duplicate=True),
     Input("account-dropdown", "value"),
     State("store-uid", "data"),
     State("store-auth-token", "data"),
+    State("store-todos", "data"),
+    State("store-todos-p3", "data"),
     prevent_initial_call=True,
 )
-def load_profile(account, uid, id_token):
+def load_profile(account, uid, id_token, current_todos, current_todos_p3):
     p = {}
     keys = {}
     todos_data = no_update
@@ -822,16 +827,18 @@ def load_profile(account, uid, id_token):
                         })
                     except Exception:
                         pass
-            cloud_todos = fb_client.get_data(uid, id_token, "todos", safe_acc)
-            if cloud_todos and "todos" in cloud_todos: todos_data = cloud_todos["todos"]
-            cloud_todos_p3 = fb_client.get_data(uid, id_token, "todos-p3", safe_acc)
-            if cloud_todos_p3 and "todos" in cloud_todos_p3: todos_p3_data = cloud_todos_p3["todos"]
+            # 로컬에 데이터가 없을 때만 Firebase에서 로드 (로컬 우선)
+            if not current_todos:
+                cloud_todos = fb_client.get_data(uid, id_token, "todos", safe_acc)
+                if cloud_todos and "todos" in cloud_todos: todos_data = cloud_todos["todos"]
+            if not current_todos_p3:
+                cloud_todos_p3 = fb_client.get_data(uid, id_token, "todos-p3", safe_acc)
+                if cloud_todos_p3 and "todos" in cloud_todos_p3: todos_p3_data = cloud_todos_p3["todos"]
         except Exception as e:
             print(f"Firebase 로드 실패: {e}")
 
     if not p:
-        profiles = load_all_profiles()
-        p = profiles.get(account, {})
+        p = {}
 
     return (
         account or "",
@@ -848,13 +855,15 @@ def load_profile(account, uid, id_token):
         keys.get("notion_key", ""),
         keys.get("notion_db", ""),
         todos_data,
-        todos_p3_data
+        todos_p3_data,
+        p if p else no_update,
     )
 
 
 # ── Page 1: Save profile ─────────────────────────────────────────────────────
 @app.callback(
     Output("profile-save-status", "children"),
+    Output("store-user-profile", "data", allow_duplicate=True),
     Input("btn-save-profile", "n_clicks"),
     State("account-dropdown", "value"),
     State("profile-name", "value"),
@@ -866,7 +875,7 @@ def load_profile(account, uid, id_token):
 )
 def save_profile(n, account, name, role, lists_data, uid, id_token):
     if not account:
-        return "계정을 먼저 선택하세요."
+        return "계정을 먼저 선택하세요.", no_update
     lists_data = lists_data or {}
     profile_data = {
         "name": name or "",
@@ -879,10 +888,6 @@ def save_profile(n, account, name, role, lists_data, uid, id_token):
         "clients":      lists_data.get("clients", []),
     }
 
-    profiles = load_all_profiles()
-    profiles[account] = profile_data
-    save_all_profiles(profiles)
-
     if uid and id_token:
         safe_acc = account.replace(".", "_")
         try:
@@ -890,7 +895,7 @@ def save_profile(n, account, name, role, lists_data, uid, id_token):
         except Exception as e:
             logger.warning(f"Firestore profiles 저장 실패: {e}")
 
-    return "저장됨 ✓"
+    return "저장됨 ✓", profile_data
 
 
 # ── Page 1: Profile list add / delete / render ───────────────────────────────
@@ -1004,13 +1009,14 @@ def render_profile_lists(data):
     State("notion-collapse", "is_open"),
     State("store-uid", "data"),
     State("store-auth-token", "data"),
+    State("store-user-profile", "data"),
     prevent_initial_call=True,
 )
-def go_to_page2(n, account, api_key, notion_key, notion_db, notion_open, uid, id_token):
+def go_to_page2(n, account, api_key, notion_key, notion_db, notion_open, uid, id_token, user_profile):
     if not account:
-        return no_update, no_update, no_update, no_update, no_update, no_update, "계정을 선택해주세요."
+        return no_update, no_update, no_update, no_update, no_update, no_update, no_update, "계정을 선택해주세요."
     if not api_key or api_key.strip() == "":
-        return no_update, no_update, no_update, no_update, no_update, no_update, "Gemini API 키를 입력해주세요."
+        return no_update, no_update, no_update, no_update, no_update, no_update, no_update, "Gemini API 키를 입력해주세요."
 
     notion_enabled = bool(notion_open and notion_key and notion_key.strip())
 
@@ -1025,9 +1031,7 @@ def go_to_page2(n, account, api_key, notion_key, notion_db, notion_open, uid, id
         except Exception as e:
             logger.warning(f"Firestore 키 저장 실패: {e}")
 
-    profiles = load_all_profiles()
-    profile = profiles.get(account, {})
-    return 2, account, api_key.strip(), profile, (notion_key or "").strip(), (notion_db or "").strip(), notion_enabled, ""
+    return 2, account, api_key.strip(), user_profile or {}, (notion_key or "").strip(), (notion_db or "").strip(), notion_enabled, ""
 
 
 # ── Page 2: Update account info label ────────────────────────────────────────
@@ -1071,15 +1075,22 @@ def fetch_emails(n, account, date_str, uid, id_token):
     Output("email-list-container", "children"),
     Input("store-emails", "data"),
     Input("store-analyze-done", "data"),
+    Input("store-highlighted-emails", "data"),
 )
-def render_email_list(emails, _):
+def render_email_list(emails, _, highlighted):
     if not emails:
         return html.Span("이메일을 조회하세요.", className="text-muted small p-2 d-block")
 
+    highlighted_set = set(highlighted or [])
     items = []
     for i, email in enumerate(emails):
         subject = email.get("subject", "제목 없음")
         sender = email.get("sender", "알 수 없음")
+        is_highlighted = i in highlighted_set
+        highlight_style = {
+            "borderLeft": "3px solid #D32F2F",
+            "backgroundColor": "#fff5f5",
+        } if is_highlighted else {}
         items.append(
             html.Div([
                 dbc.Row([
@@ -1094,9 +1105,11 @@ def render_email_list(emails, _):
                     dbc.Col(
                         html.Div(
                             [
-                                html.Span(sender, className="fw-semibold small d-block"),
+                                html.Span(sender, className="fw-semibold small d-block",
+                                          style={"color": "#D32F2F"} if is_highlighted else {}),
                                 html.Span(subject[:55] + ("…" if len(subject) > 55 else ""),
-                                           className="text-muted small"),
+                                           className="small",
+                                           style={"color": "#D32F2F"} if is_highlighted else {"color": "#6c757d"}),
                             ],
                             id={"type": "email-row", "index": i},
                             n_clicks=0,
@@ -1104,7 +1117,7 @@ def render_email_list(emails, _):
                         ),
                     ),
                 ], className="g-0 align-items-center"),
-            ], className="email-item px-2 py-1")
+            ], className="email-item px-2 py-1", style=highlight_style)
         )
     return html.Div(items)
 
@@ -1397,6 +1410,18 @@ def update_p2_active_count(checked, todos):
 
 
 @app.callback(
+    Output("p3-todo-count-badge", "children"),
+    Output("p3-todo-count-badge", "style"),
+    Input("store-todos-p3", "data"),
+)
+def update_p3_badge(todos):
+    count = sum(1 for t in (todos or []) if t.get("status") == "active")
+    if count > 0:
+        return str(count), {"fontSize": "0.7rem", "display": "inline-block"}
+    return "", {"fontSize": "0.7rem", "display": "none"}
+
+
+@app.callback(
     Output("p2-trash-select-count", "children"),
     Input("store-todo-trash-checked-p2", "data"),
     Input("store-todos", "data"),
@@ -1468,6 +1493,7 @@ def _render_todo_item_p2(todo, idx, tab="active"):
     text = todo.get("text", "")
     subject = todo.get("email_subject", "")
     summary = todo.get("summary", "")
+    priority = todo.get("priority", "보통")
     cb_type = "todo-cb-active-p2" if tab == "active" else "todo-cb-trash-p2"
 
     if status == "deleted":
@@ -1479,6 +1505,14 @@ def _render_todo_item_p2(todo, idx, tab="active"):
     else:
         text_style = {"color": "#212121"}
 
+    priority_colors = {"높음": "danger", "보통": "warning", "낮음": "primary"}
+    priority_badge = dbc.Badge(
+        priority,
+        color=priority_colors.get(priority, "secondary"),
+        className="me-1",
+        style={"fontSize": "var(--fs-badge)"},
+    )
+
     return html.Div([
         dbc.Row([
             dbc.Col(
@@ -1486,8 +1520,11 @@ def _render_todo_item_p2(todo, idx, tab="active"):
                 width="auto",
             ),
             dbc.Col([
-                html.Span(text[:60] + ("…" if len(text) > 60 else ""),
-                           className="small d-block", style=text_style),
+                html.Div([
+                    priority_badge,
+                    html.Span(text[:55] + ("…" if len(text) > 55 else ""),
+                               className="small", style=text_style),
+                ], className="d-flex align-items-center flex-wrap"),
                 html.Span(f"출처: {subject[:30]}", className="text-muted",
                            style={"fontSize": "var(--fs-meta)"}),
             ]),
@@ -1564,6 +1601,32 @@ def update_todo_checked_p2(values, todos):
     return checked
 
 
+# ── Page 2: Todo 선택 → 연관 이메일 강조 ─────────────────────────────────────
+@app.callback(
+    Output("store-highlighted-emails", "data"),
+    Input("store-todo-checked-p2", "data"),
+    State("store-todos", "data"),
+    State("store-emails", "data"),
+)
+def highlight_related_emails(checked, todos, emails):
+    if not checked or not todos or not emails:
+        return []
+    # 체크된 TODO들의 email_subject 수집
+    target_subjects = set()
+    for idx in checked:
+        i = int(idx)
+        if 0 <= i < len(todos):
+            subj = todos[i].get("email_subject", "")
+            if subj:
+                target_subjects.add(subj)
+    # 해당 subject와 일치하는 이메일 인덱스 수집
+    highlighted = [
+        i for i, email in enumerate(emails)
+        if email.get("subject", "") in target_subjects
+    ]
+    return highlighted
+
+
 @app.callback(
     Output("store-todo-trash-checked-p2", "data"),
     Input({"type": "todo-cb-trash-p2", "index": ALL}, "value"),
@@ -1608,6 +1671,7 @@ def select_all_trash_p2(checked):
     Output("store-todos-p3", "data", allow_duplicate=True),
     Output("p2-toast", "children", allow_duplicate=True),
     Output("p2-toast", "is_open", allow_duplicate=True),
+    Output("store-page", "data", allow_duplicate=True),
     Input("btn-todo-delete", "n_clicks"),
     Input("btn-todo-forward", "n_clicks"),
     State("store-todo-checked-p2", "data"),
@@ -1617,12 +1681,10 @@ def select_all_trash_p2(checked):
 )
 def todo_actions_p2(n_delete, n_forward, checked, todos, todos_p3):
     try:
-        print(f"[DEBUG] todo_actions_p2 fired: checked={checked}, todos={len(todos) if todos else 0}, todos_p3={len(todos_p3) if todos_p3 else 0}", flush=True)
         if not todos:
-            return no_update, no_update, "항목이 없습니다.", True
+            return no_update, no_update, "항목이 없습니다.", True, no_update
 
         triggered = ctx.triggered_id
-        print(f"[DEBUG] triggered={triggered}", flush=True)
         todos = [dict(t) for t in todos]
 
         # 전달 버튼은 체크 없으면 전체 active 항목 전달
@@ -1633,7 +1695,7 @@ def todo_actions_p2(n_delete, n_forward, checked, todos, todos_p3):
             checked_ints = [int(c) for c in checked] if checked else []
             target_indices = set(checked_ints) if checked_ints else {i for i, t in enumerate(todos) if t.get("status") == "active"}
             if not target_indices:
-                return no_update, no_update, "전달할 항목이 없습니다.", True
+                return no_update, no_update, "전달할 항목이 없습니다.", True, no_update
             # store-todos-p3에 독립 복사본 추가 (중복 제외)
             existing_ids = {t.get("id","") for t in todos_p3}
             new_items = []
@@ -1649,11 +1711,12 @@ def todo_actions_p2(n_delete, n_forward, checked, todos, todos_p3):
             todos_p3.extend(new_items)
             # store-todos에서 전달된 항목 완전 제거 (단방향 소통)
             todos = [t for i, t in enumerate(todos) if i not in target_indices]
-            return todos, todos_p3, f"{len(new_items)}개 항목을 전체 TODO로 전달했습니다.", True
+            # 전달 성공 시 자동으로 Page3으로 이동
+            return todos, todos_p3, f"{len(new_items)}개 항목이 전체 TODO에 추가되었습니다.", True, 3
 
         # 삭제는 체크 필수
         if not checked:
-            return no_update, no_update, "항목을 선택하세요.", True
+            return no_update, no_update, "항목을 선택하세요.", True, no_update
 
         checked_ints = [int(c) for c in checked]
         if triggered == "btn-todo-delete":
@@ -1663,11 +1726,11 @@ def todo_actions_p2(n_delete, n_forward, checked, todos, todos_p3):
                     todos[i]["pending_sync"] = True
             msg = f"{len(checked_ints)}개 삭제됨"
         else:
-            return no_update, no_update, "", False
+            return no_update, no_update, "", False, no_update
 
-        return todos, no_update, msg, True
+        return todos, no_update, msg, True, no_update
     except Exception as e:
-        return no_update, no_update, f"오류: {traceback.format_exc()}", True
+        return no_update, no_update, f"오류: {traceback.format_exc()}", True, no_update
 
 
 # ── Page 2: Trash actions ─────────────────────────────────────────────────────
@@ -1705,11 +1768,11 @@ def trash_actions_p2(n_restore, n_perm, cb_values, todos, notion_key, notion_db)
         if notion_key and notion_db:
             page_ids = [todos[i]["notion_page_id"] for i in checked_ints if todos[i].get("notion_page_id")]
             if page_ids:
-                try:
-                    from notion_sync import NotionSync
-                    NotionSync(notion_key, notion_db).archive_pages(page_ids)
-                except Exception as e:
-                    logger.warning(f"Notion 아카이브 실패: {e}")
+                threading.Thread(
+                    target=_archive_notion_bg,
+                    args=(notion_key, notion_db, page_ids),
+                    daemon=True
+                ).start()
         checked_set = set(checked_ints)
         todos = [t for i, t in enumerate(todos) if i not in checked_set]
         return todos, f"{len(checked_ints)}개 영구삭제됨", True
@@ -2124,11 +2187,11 @@ def todo_actions_p3(n_complete, n_delete, n_uncomplete, n_del_comp, n_restore, n
         if notion_key and notion_db:
             page_ids = [todos[i]["notion_page_id"] for i in checked_trash if todos[i].get("notion_page_id")]
             if page_ids:
-                try:
-                    from notion_sync import NotionSync
-                    NotionSync(notion_key, notion_db).archive_pages(page_ids)
-                except Exception as e:
-                    logger.warning(f"Notion 아카이브 실패: {e}")
+                threading.Thread(
+                    target=_archive_notion_bg,
+                    args=(notion_key, notion_db, page_ids),
+                    daemon=True
+                ).start()
         todos = [t for t in todos if t["id"] not in ids_to_delete]
         perm_deleted_ids = list(set(perm_deleted_ids) | ids_to_delete)
         msg = f"{len(ids_to_delete)}개 영구 삭제됨"
