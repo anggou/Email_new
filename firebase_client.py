@@ -2,6 +2,25 @@ import requests
 import json
 import os
 
+_AUTH_ERRORS = {
+    "INVALID_EMAIL":               "이메일 형식이 올바르지 않습니다.",
+    "EMAIL_NOT_FOUND":             "등록되지 않은 이메일입니다.",
+    "INVALID_PASSWORD":            "비밀번호가 올바르지 않습니다.",
+    "WRONG_PASSWORD":              "비밀번호가 올바르지 않습니다.",
+    "INVALID_LOGIN_CREDENTIALS":   "이메일 또는 비밀번호가 올바르지 않습니다.",
+    "USER_DISABLED":               "비활성화된 계정입니다. 관리자에게 문의하세요.",
+    "TOO_MANY_ATTEMPTS_TRY_LATER": "로그인 시도가 너무 많습니다. 잠시 후 다시 시도하세요.",
+    "EMAIL_EXISTS":                "이미 사용 중인 이메일입니다.",
+    "WEAK_PASSWORD":               "비밀번호가 너무 약합니다. (6자 이상 입력하세요)",
+    "OPERATION_NOT_ALLOWED":       "이 로그인 방식은 현재 비활성화되어 있습니다.",
+}
+
+def _translate_auth_error(raw_msg: str) -> str:
+    for code, korean in _AUTH_ERRORS.items():
+        if code in raw_msg:
+            return korean
+    return "인증 오류가 발생했습니다."
+
 class FirebaseClient:
     """
     Firebase Client SDK를 파이썬에서 흉내 내기 위한 REST API 클라이언트입니다.
@@ -24,8 +43,8 @@ class FirebaseClient:
         response = requests.post(self.auth_signup_url, json=payload)
         
         if response.status_code != 200:
-            err_msg = response.json().get('error', {}).get('message', 'Unknown Error')
-            raise Exception(f"회원가입 실패: {err_msg}")
+            raw = response.json().get('error', {}).get('message', '')
+            raise Exception(_translate_auth_error(raw))
             
         return response.json() # idToken, email, refreshToken, expiresIn, localId(UID) 반환
 
@@ -35,10 +54,10 @@ class FirebaseClient:
         response = requests.post(self.auth_login_url, json=payload)
         
         if response.status_code != 200:
-            err_msg = response.json().get('error', {}).get('message', 'Unknown Error')
-            raise Exception(f"로그인 실패: {err_msg}")
-            
-        return response.json() # idToken, email, refreshToken, expiresIn, localId(UID) 반환
+            raw = response.json().get('error', {}).get('message', '')
+            raise Exception(_translate_auth_error(raw))
+
+        return response.json()
 
     def _get_headers(self, id_token):
         return {"Authorization": f"Bearer {id_token}"}

@@ -170,12 +170,53 @@ def page0_layout():
                         dbc.Input(id="auth-email", type="email", placeholder="이메일", className="mb-2"),
                         dbc.Input(id="auth-password", type="password", placeholder="비밀번호", className="mb-3"),
                         dbc.Button("로그인", id="btn-login", color="primary", className="w-100 mb-2 fw-bold"),
-                        dbc.Button("회원가입", id="btn-signup", color="secondary", outline=True, className="w-100"),
+                        dbc.Button("회원가입", id="btn-open-signup-modal", color="secondary",
+                                   outline=True, className="w-100"),
                         html.Div(id="auth-error", className="text-danger mt-3 small text-center"),
                     ])
                 ], className="card-clean mt-5 shadow-sm"),
             ], md={"size": 6, "offset": 3}, lg={"size": 4, "offset": 4}),
         ]),
+
+        # ── 회원가입 모달 ──────────────────────────────────────────────────────
+        dbc.Modal([
+            dbc.ModalHeader(dbc.ModalTitle("회원가입")),
+            dbc.ModalBody([
+                dbc.Label("이메일 (아이디)", className="small fw-semibold"),
+                dbc.Input(id="signup-email", type="email", placeholder="example@email.com",
+                          className="mb-3"),
+                dbc.Label("비밀번호", className="small fw-semibold"),
+                dbc.Input(id="signup-password", type="password", placeholder="6자 이상",
+                          className="mb-3"),
+                dbc.Label("비밀번호 확인", className="small fw-semibold"),
+                dbc.Input(id="signup-password-confirm", type="password", placeholder="비밀번호 재입력",
+                          className="mb-4"),
+                dbc.Card([
+                    dbc.CardBody([
+                        html.P("개인정보 수집 및 이용 안내", className="fw-bold small mb-2"),
+                        html.Ul([
+                            html.Li("이메일 계정 정보, Gemini API 키, Notion API 키가 수집됩니다.", className="small"),
+                            html.Li("수집된 정보는 Google Firebase 보안 정책하에 암호화되어 보호됩니다.", className="small"),
+                            html.Li("수집 정보는 본 앱의 이메일 요약 및 TODO 관리 기능에만 사용됩니다.", className="small"),
+                            html.Li("계정 삭제 시 모든 데이터가 영구 삭제됩니다.", className="small"),
+                        ], className="mb-0 ps-3"),
+                    ])
+                ], color="light", className="mb-3"),
+                dbc.Checkbox(
+                    id="signup-agree-cb",
+                    label="위 개인정보 수집 및 이용에 동의합니다.",
+                    value=False,
+                    className="small",
+                ),
+                html.Div(id="signup-error", className="text-danger mt-2 small text-center"),
+            ]),
+            dbc.ModalFooter([
+                dbc.Button("가입하기", id="btn-signup", color="primary", className="me-2",
+                           disabled=True),
+                dbc.Button("취소", id="btn-close-signup-modal", color="secondary", outline=True),
+            ]),
+        ], id="signup-modal", is_open=False, centered=True, backdrop="static"),
+
     ], fluid=True, className="py-4")
 
 def page1_layout():
@@ -681,11 +722,82 @@ def toggle_pages(page):
 @app.callback(
     Output("login-loading-border", "className", allow_duplicate=True),
     Input("btn-login", "n_clicks"),
-    Input("btn-signup", "n_clicks"),
     prevent_initial_call=True,
 )
-def show_login_loading(n_login, n_signup):
+def show_login_loading(n_login):
     return "active"
+
+
+# ── 로그인 실패 시 로딩 테두리 제거 ──────────────────────────────────────────
+@app.callback(
+    Output("login-loading-border", "className", allow_duplicate=True),
+    Input("auth-error", "children"),
+    prevent_initial_call=True,
+)
+def hide_loading_on_auth_error(error):
+    return ""
+
+
+# ── 회원가입 모달: 열기/닫기 ─────────────────────────────────────────────────
+@app.callback(
+    Output("signup-modal", "is_open"),
+    Output("signup-email", "value"),
+    Output("signup-password", "value"),
+    Output("signup-password-confirm", "value"),
+    Output("signup-agree-cb", "value"),
+    Output("signup-error", "children"),
+    Input("btn-open-signup-modal", "n_clicks"),
+    Input("btn-close-signup-modal", "n_clicks"),
+    State("signup-modal", "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_signup_modal(n_open, n_close, is_open):
+    # 열기 또는 닫기 시 입력값 초기화
+    return not is_open, "", "", "", False, ""
+
+
+# ── 회원가입 모달: 동의 체크박스 → 가입 버튼 활성화 ──────────────────────────
+@app.callback(
+    Output("btn-signup", "disabled"),
+    Input("signup-agree-cb", "value"),
+    prevent_initial_call=True,
+)
+def toggle_signup_btn(agreed):
+    return not bool(agreed)
+
+
+# ── 회원가입 처리 ─────────────────────────────────────────────────────────────
+@app.callback(
+    Output("store-auth-token", "data", allow_duplicate=True),
+    Output("store-uid", "data", allow_duplicate=True),
+    Output("store-page", "data", allow_duplicate=True),
+    Output("signup-error", "children", allow_duplicate=True),
+    Output("signup-modal", "is_open", allow_duplicate=True),
+    Input("btn-signup", "n_clicks"),
+    State("signup-email", "value"),
+    State("signup-password", "value"),
+    State("signup-password-confirm", "value"),
+    State("signup-agree-cb", "value"),
+    prevent_initial_call=True,
+)
+def handle_signup(n, email, password, password_confirm, agreed):
+    if not n:
+        return no_update, no_update, no_update, no_update, no_update
+    if not email or not password or not password_confirm:
+        return no_update, no_update, no_update, "모든 항목을 입력해주세요.", no_update
+    if password != password_confirm:
+        return no_update, no_update, no_update, "비밀번호가 일치하지 않습니다.", no_update
+    if len(password) < 6:
+        return no_update, no_update, no_update, "비밀번호는 6자 이상이어야 합니다.", no_update
+    if not agreed:
+        return no_update, no_update, no_update, "개인정보 수집 동의가 필요합니다.", no_update
+    try:
+        res = fb_client.sign_up(email, password)
+        id_token = res.get("idToken")
+        uid = res.get("localId")
+        return id_token, uid, 1, "", False  # 성공 → 모달 닫고 Page1 이동
+    except Exception as e:
+        return no_update, no_update, no_update, str(e), no_update
 
 
 # ── Auth Logic ────────────────────────────────────────────────────────────────
@@ -701,24 +813,17 @@ def show_login_loading(n_login, n_signup):
     Output("notion-key-input", "value", allow_duplicate=True),
     Output("notion-db-input", "value", allow_duplicate=True),
     Input("btn-login", "n_clicks"),
-    Input("btn-signup", "n_clicks"),
     State("auth-email", "value"),
     State("auth-password", "value"),
     prevent_initial_call=True,
 )
-def handle_auth(n_login, n_signup, email, password):
-    triggered = ctx.triggered_id
-    empty = (no_update,) * 6  # profile/key 필드 no_update
+def handle_auth(n_login, email, password):
+    empty = (no_update,) * 6
     if not email or not password:
         return no_update, no_update, no_update, "이메일과 비밀번호를 모두 입력하세요.", *empty
 
     try:
-        if triggered == "btn-login":
-            res = fb_client.sign_in(email, password)
-        elif triggered == "btn-signup":
-            res = fb_client.sign_up(email, password)
-        else:
-            return no_update, no_update, no_update, "", *empty
+        res = fb_client.sign_in(email, password)
 
         id_token = res.get("idToken")
         uid      = res.get("localId")
@@ -2742,17 +2847,29 @@ def _create_tray_icon():
     return pystray.Icon("Email AI Summarizer", image, "Email AI Summarizer", menu)
 
 
+def _is_server_running(port=8050):
+    """해당 포트에 이미 서버가 실행 중인지 확인"""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
 if __name__ == "__main__":
-    # Dash 서버를 백그라운드 스레드에서 실행
-    server_thread = threading.Thread(
-        target=lambda: app.run(debug=False, port=8050),
-        daemon=True,
-    )
-    server_thread.start()
+    if _is_server_running(8050):
+        # 이미 실행 중 → 브라우저만 열고 종료
+        webbrowser.open("http://localhost:8050")
+    else:
+        # 새 인스턴스 → 서버 시작
+        server_thread = threading.Thread(
+            target=lambda: app.run(debug=False, port=8050),
+            daemon=True,
+        )
+        server_thread.start()
 
-    # 1.5초 후 브라우저 자동 오픈
-    threading.Timer(1.5, lambda: webbrowser.open("http://localhost:8050")).start()
+        # 1.5초 후 브라우저 자동 오픈
+        threading.Timer(1.5, lambda: webbrowser.open("http://localhost:8050")).start()
 
-    # 시스템 트레이 아이콘을 메인 스레드에서 실행 (Windows 필수)
-    tray = _create_tray_icon()
-    tray.run()
+        # 시스템 트레이 아이콘을 메인 스레드에서 실행 (Windows 필수)
+        tray = _create_tray_icon()
+        tray.run()
