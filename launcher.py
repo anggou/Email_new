@@ -9,7 +9,7 @@ from tkinter import ttk, messagebox
 from pathlib import Path
 
 VERSION_URL = "https://raw.githubusercontent.com/anggou/Email_new/master/version.json"
-APP_EXE_NAME = "Email_Summarizer.exe"
+APP_EXE_NAME = "EmailSummarizer.exe"
 
 
 def get_install_dir():
