@@ -104,6 +104,36 @@ class OutlookManager:
         finally:
             pythoncom.CoUninitialize()
 
+    def mark_as_read(self, entry_id: str):
+        """EntryID로 Outlook에서 해당 메일을 읽음 처리합니다."""
+        pythoncom.CoInitialize()
+        try:
+            outlook = win32com.client.Dispatch("Outlook.Application")
+            mail = outlook.Session.GetItemFromID(entry_id)
+            if not mail.UnRead:
+                return  # 이미 읽음 상태
+            mail.UnRead = False
+            mail.Save()
+        except Exception as e:
+            self.logger.warning(f"읽음 처리 실패 (entry_id={entry_id}): {e}")
+        finally:
+            pythoncom.CoUninitialize()
+
+    def open_reply_with_body(self, entry_id: str, body: str):
+        """EntryID로 원본 메일의 답장 창을 열고 본문에 body를 채워줍니다."""
+        pythoncom.CoInitialize()
+        try:
+            outlook = win32com.client.Dispatch("Outlook.Application")
+            mail = outlook.Session.GetItemFromID(entry_id)
+            reply = mail.Reply()
+            reply.Body = body + "\n\n" + reply.Body  # AI 초안 위에 기존 인용문 유지
+            reply.Display()
+        except Exception as e:
+            self.logger.error(f"답장 창 열기 실패: {e}")
+            raise Exception(f"답장 창을 열 수 없습니다: {e}")
+        finally:
+            pythoncom.CoUninitialize()
+
     def open_email_by_entry_id(self, entry_id: str):
         """EntryID로 Outlook에서 해당 메일을 열어 표시합니다."""
         pythoncom.CoInitialize()

@@ -15,6 +15,47 @@
     --fs-label: 0.80rem;
 }
 
+/* ── 로그인 로딩: 윈도우 테두리 파란 빛 회전 ─────────────────────────────────── */
+@keyframes border-spin {
+    to { transform: rotate(360deg); }
+}
+
+#login-loading-border {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    pointer-events: none;
+    overflow: hidden;
+}
+
+#login-loading-border::before {
+    content: '';
+    position: absolute;
+    inset: -100%;
+    background: conic-gradient(
+        from 0deg,
+        transparent 0%,
+        transparent 60%,
+        rgba(21, 101, 192, 0.9) 75%,
+        rgba(100, 181, 246, 1) 82%,
+        rgba(21, 101, 192, 0.9) 88%,
+        transparent 100%
+    );
+    animation: border-spin 1.2s linear infinite;
+}
+
+#login-loading-border::after {
+    content: '';
+    position: absolute;
+    inset: 5px;
+    background: #f0f2f5;
+}
+
+#login-loading-border.active {
+    display: block;
+}
+
 body {
     background-color: #f0f2f5;
     font-family: 'Segoe UI', sans-serif;

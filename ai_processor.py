@@ -100,3 +100,37 @@ todos는 문자열의 리스트 형태로 제공해줘.
             self.logger.error(f"Gemini API 호출 중 오류 발생: {e}")
             print(f"[AIProcessor ERROR] {e}")
             raise Exception(f"{e}")
+
+    def generate_reply(self, email_subject: str, summary: str, todo_text: str, user_profile: str = "") -> str:
+        """메일 요약과 TODO를 바탕으로 AI 답장 초안을 생성합니다."""
+        profile_block = f"\n[내 정보]\n{user_profile}\n" if user_profile else ""
+        prompt = f"""{profile_block}
+아래 이메일에 대한 전문적인 답장 초안을 작성해줘.
+답장은 한국어로 작성하고, 인사말 → 본문 → 마무리 인사 순서로 구성해줘.
+본문에는 TODO 항목에 해당하는 내용을 반드시 포함해야 해.
+마크다운 없이 일반 텍스트로만 작성해줘.
+
+[원본 메일 제목]
+{email_subject}
+
+[메일 요약]
+{summary}
+
+[처리해야 할 TODO]
+{todo_text}
+"""
+        try:
+            try:
+                response = self.client.models.generate_content(
+                    model='gemini-2.0-flash',
+                    contents=prompt
+                )
+            except Exception:
+                response = self.client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=prompt
+                )
+            return response.text.strip()
+        except Exception as e:
+            self.logger.error(f"답장 생성 오류: {e}")
+            raise Exception(f"답장 생성 실패: {e}")

@@ -73,6 +73,12 @@ _analysis = {
     "total": 0,
 }
 
+_ai_reply = {
+    "status": "idle",   # idle | running | done | error
+    "text": "",         # 생성된 답장 또는 에러 메시지
+    "entry_id": "",
+}
+
 app = dash.Dash(
     __name__,
     external_stylesheets=[dbc.themes.BOOTSTRAP, dbc.icons.BOOTSTRAP],
@@ -560,6 +566,30 @@ def page3_layout():
 
         dcc.Store(id="edit-target-id"),
 
+        # ── AI 답장 모달 ────────────────────────────────────────────────────────
+        dbc.Modal([
+            dbc.ModalHeader(dbc.ModalTitle(html.Span(id="ai-reply-modal-title", children="AI 답장 생성 중…"))),
+            dbc.ModalBody([
+                html.Div(id="ai-reply-loading-wrap", children=[
+                    dbc.Spinner(size="sm", color="primary"),
+                    html.Span("Gemini AI가 답장을 작성하고 있습니다…", className="text-muted small ms-2"),
+                ]),
+                html.Div(id="ai-reply-result-wrap", style={"display": "none"}, children=[
+                    dbc.Label("생성된 답장 초안 (수정 후 Outlook에서 열기)", className="small fw-semibold mb-1"),
+                    dbc.Textarea(id="ai-reply-text", rows=12,
+                                 style={"fontSize": "var(--fs-body)", "fontFamily": "inherit"}),
+                ]),
+            ]),
+            dbc.ModalFooter([
+                dbc.Button("Outlook에서 열기", id="btn-ai-reply-open-outlook",
+                           color="primary", className="me-2", style={"display": "none"}),
+                dbc.Button("닫기", id="btn-ai-reply-close", color="secondary", outline=True),
+            ]),
+        ], id="ai-reply-modal", is_open=False, backdrop="static", centered=True, size="lg"),
+        dcc.Store(id="store-ai-reply-entry-id", data=""),
+        dcc.Store(id="store-ai-reply-done", data=0),
+        dcc.Interval(id="ai-reply-interval", interval=500, n_intervals=0, disabled=True),
+
         html.Div("[ Page 3 — 전체 TODO 관리 / Notion 동기화 ]",
                  style={"textAlign": "center", "fontSize": "var(--fs-xs)",
                         "opacity": "0.5", "padding": "6px 0", "color": "#aaa"}),
@@ -591,6 +621,8 @@ app.layout = html.Div([
     dcc.Store(id="store-email-checked", data=[]),
     dcc.Store(id="store-todo-checked-p2", data=[]),
     dcc.Store(id="store-highlighted-emails", data=[]),
+    dcc.Store(id="store-new-entry-ids", data=[]),   # 현재 세션에서 NEW 표시할 entry_id 목록
+    dcc.Store(id="store-seen-by-date", data={}),    # {date: [entry_ids]} 이전 조회에서 본 메일
     dcc.Store(id="store-todo-trash-checked-p2", data=[]),
     dcc.Store(id="store-todo-checked-p3-active", data=[]),
     dcc.Store(id="store-todo-checked-p3-completed", data=[]),
@@ -606,6 +638,9 @@ app.layout = html.Div([
     dcc.Store(id="store-perm-deleted-ids", storage_type="local", data=[]),
     dcc.Store(id="store-notion-archive-queue", storage_type="local", data=[]),
     dcc.Interval(id="notion-poll-interval", interval=60*1000, n_intervals=0, disabled=False),
+
+    # 로그인 로딩 테두리 오버레이
+    html.Div(id="login-loading-border"),
 
     # Pages
     html.Div(id="page0-container", children=page0_layout()),
@@ -625,17 +660,32 @@ app.layout = html.Div([
     Output("page1-container", "style"),
     Output("page2-container", "style"),
     Output("page3-container", "style"),
+    Output("login-loading-border", "className"),
     Input("store-page", "data"),
 )
 def toggle_pages(page):
     show = {"display": "block"}
     hide = {"display": "none"}
+    # 페이지 전환 완료 시 로딩 테두리 숨김
+    border_class = "" if page != 0 else ""
     return (
         show if page == 0 else hide,
         show if page == 1 else hide,
         show if page == 2 else hide,
         show if page == 3 else hide,
+        "",  # 페이지 전환되면 active 클래스 제거
     )
+
+
+# ── 로그인 버튼 클릭 시 로딩 테두리 표시 ─────────────────────────────────────
+@app.callback(
+    Output("login-loading-border", "className", allow_duplicate=True),
+    Input("btn-login", "n_clicks"),
+    Input("btn-signup", "n_clicks"),
+    prevent_initial_call=True,
+)
+def show_login_loading(n_login, n_signup):
+    return "active"
 
 
 # ── Auth Logic ────────────────────────────────────────────────────────────────
@@ -783,6 +833,7 @@ def toggle_profile(n, is_open):
     Output("store-todos", "data", allow_duplicate=True),
     Output("store-todos-p3", "data", allow_duplicate=True),
     Output("store-user-profile", "data", allow_duplicate=True),
+    Output("store-seen-by-date", "data", allow_duplicate=True),
     Input("account-dropdown", "value"),
     State("store-uid", "data"),
     State("store-auth-token", "data"),
@@ -795,6 +846,7 @@ def load_profile(account, uid, id_token, current_todos, current_todos_p3):
     keys = {}
     todos_data = no_update
     todos_p3_data = no_update
+    seen_by_date_data = no_update
     if uid and id_token and account:
         safe_acc = account.replace(".", "_")
         try:
@@ -836,6 +888,9 @@ def load_profile(account, uid, id_token, current_todos, current_todos_p3):
             if not current_todos_p3:
                 cloud_todos_p3 = fb_client.get_data(uid, id_token, "todos-p3", safe_acc)
                 if cloud_todos_p3 and "todos" in cloud_todos_p3: todos_p3_data = cloud_todos_p3["todos"]
+            cloud_seen = fb_client.get_data(uid, id_token, "seen-by-date", safe_acc)
+            if cloud_seen and "data" in cloud_seen:
+                seen_by_date_data = cloud_seen["data"]
         except Exception as e:
             print(f"Firebase 로드 실패: {e}")
 
@@ -859,6 +914,7 @@ def load_profile(account, uid, id_token, current_todos, current_todos_p3):
         todos_data,
         todos_p3_data,
         p if p else no_update,
+        seen_by_date_data,
     )
 
 
@@ -1049,16 +1105,21 @@ def update_account_info(account):
 @app.callback(
     Output("store-emails", "data"),
     Output("p2-status", "children"),
+    Output("store-new-entry-ids", "data"),
+    Output("store-seen-by-date", "data"),
     Input("btn-refresh", "n_clicks"),
     State("store-account", "data"),
     State("p2-date-picker", "date"),
     State("store-uid", "data"),
     State("store-auth-token", "data"),
+    State("store-seen-by-date", "data"),
+    State("store-new-entry-ids", "data"),
     prevent_initial_call=True,
 )
-def fetch_emails(n, account, date_str, uid, id_token):
+def fetch_emails(n, account, date_str, uid, id_token, seen_by_date, existing_new_ids):
+    seen_by_date = seen_by_date or {}
     if not account:
-        return [], "계정을 선택하세요."
+        return [], "계정을 선택하세요.", (existing_new_ids or []), seen_by_date
     try:
         from outlook_manager import OutlookManager
         mgr = OutlookManager()
@@ -1067,9 +1128,40 @@ def fetch_emails(n, account, date_str, uid, id_token):
         # Outlook에서 직접 가져오기
         emails = mgr.get_emails_by_date(account_email=account, target_date=target_date, limit=100)
 
-        return emails, f"조회 완료: 총 {len(emails)}개 메일"
+        # 신규 메일 판별: 이번 날짜에서 이전에 못 본 entry_id만 NEW
+        seen_ids = set(seen_by_date.get(date_str, []))
+        truly_new = [
+            e["entry_id"] for e in emails
+            if e.get("entry_id") and e["entry_id"] not in seen_ids
+        ]
+        # 기존 NEW 목록에 신규만 추가 (다른 날짜의 NEW는 유지)
+        combined_new = list(set(existing_new_ids or []) | set(truly_new))
+        # 이번 조회한 모든 entry_id를 seen에 추가
+        updated_seen = dict(seen_by_date)
+        updated_seen[date_str] = list(seen_ids | set(e.get("entry_id", "") for e in emails))
+
+        # Firebase에 백그라운드로 저장 (본문은 5000자 제한 - Firestore 1MB 한도 대비)
+        if uid and id_token and emails and date_str:
+            def _save_emails_to_cloud():
+                try:
+                    safe_acc = account.replace(".", "_")
+                    doc_id = f"{safe_acc}_{date_str}"
+                    emails_to_save = [
+                        {**e, "body": e.get("body", "")[:5000]}
+                        for e in emails
+                    ]
+                    fb_client.save_data(uid, id_token, "emails", doc_id, {
+                        "account": account,
+                        "date": date_str,
+                        "emails": emails_to_save,
+                    })
+                except Exception as e:
+                    logger.warning(f"이메일 클라우드 저장 실패: {e}")
+            threading.Thread(target=_save_emails_to_cloud, daemon=True).start()
+
+        return emails, f"조회 완료: 총 {len(emails)}개 메일", combined_new, updated_seen
     except Exception as e:
-        return [], f"오류: {e}"
+        return [], f"오류: {e}", (existing_new_ids or []), seen_by_date
 
 
 # ── Page 2: Render email list ─────────────────────────────────────────────────
@@ -1078,28 +1170,45 @@ def fetch_emails(n, account, date_str, uid, id_token):
     Input("store-emails", "data"),
     Input("store-analyze-done", "data"),
     Input("store-highlighted-emails", "data"),
+    Input("store-new-entry-ids", "data"),
+    State("store-email-checked", "data"),
 )
-def render_email_list(emails, _, highlighted):
+def render_email_list(emails, _, highlighted, new_entry_ids, checked_indices):
     if not emails:
         return html.Span("이메일을 조회하세요.", className="text-muted small p-2 d-block")
 
     highlighted_set = set(highlighted or [])
+    new_set = set(new_entry_ids or [])
+    checked_set = set(checked_indices or [])
     items = []
     for i, email in enumerate(emails):
         subject = email.get("subject", "제목 없음")
         sender = email.get("sender", "알 수 없음")
+        entry_id = email.get("entry_id", "")
         is_highlighted = i in highlighted_set
+        is_new = entry_id in new_set
+
         highlight_style = {
             "borderLeft": "3px solid #D32F2F",
             "backgroundColor": "#fff5f5",
         } if is_highlighted else {}
+
+        # NEW 아이콘 (new.png)
+        new_icon = html.Img(
+            src="/assets/new.png",
+            style={"height": "16px", "marginRight": "4px", "verticalAlign": "middle"},
+        ) if is_new else None
+
+        text_color = {"color": "#D32F2F"} if (is_new or is_highlighted) else {}
+        subject_color = {"color": "#D32F2F"} if (is_new or is_highlighted) else {"color": "#6c757d"}
+
         items.append(
             html.Div([
                 dbc.Row([
                     dbc.Col(
                         dbc.Checkbox(
                             id={"type": "email-checkbox", "index": i},
-                            value=False,
+                            value=i in checked_set,
                         ),
                         width="auto",
                         className="pe-1",
@@ -1108,10 +1217,11 @@ def render_email_list(emails, _, highlighted):
                         html.Div(
                             [
                                 html.Span(sender, className="fw-semibold small d-block",
-                                          style={"color": "#D32F2F"} if is_highlighted else {}),
-                                html.Span(subject[:55] + ("…" if len(subject) > 55 else ""),
-                                           className="small",
-                                           style={"color": "#D32F2F"} if is_highlighted else {"color": "#6c757d"}),
+                                          style=text_color),
+                                html.Span([
+                                    *([new_icon] if new_icon else []),
+                                    subject[:55] + ("…" if len(subject) > 55 else ""),
+                                ], className="small", style=subject_color),
                             ],
                             id={"type": "email-row", "index": i},
                             n_clicks=0,
@@ -1158,6 +1268,24 @@ def show_email_body(idx, emails):
 )
 def update_email_checked(values):
     return [i for i, v in enumerate(values) if v]
+
+
+# ── Page 2: 체크박스 선택 시 NEW 상태 해제 ────────────────────────────────────
+# store-email-checked → store-new-entry-ids 체인으로 순서 보장
+@app.callback(
+    Output("store-new-entry-ids", "data", allow_duplicate=True),
+    Input("store-email-checked", "data"),
+    State("store-emails", "data"),
+    State("store-new-entry-ids", "data"),
+    prevent_initial_call=True,
+)
+def clear_new_on_check(checked_indices, emails, new_entry_ids):
+    new_set = set(new_entry_ids or [])
+    for i in (checked_indices or []):
+        if i < len(emails or []):
+            entry_id = emails[i].get("entry_id", "")
+            new_set.discard(entry_id)
+    return list(new_set)
 
 
 # ── Page 2: Select all emails ─────────────────────────────────────────────────
@@ -1217,6 +1345,15 @@ def _run_analysis_thread(checked_indices, emails, user_profile, api_key, existin
             err_detail = f"[{email.get('subject','?')[:20]}] {e}"
             errors.append(err_detail)
             continue
+
+        # 분석 성공한 메일 Outlook 읽음 처리
+        entry_id = email.get("entry_id", "")
+        if entry_id:
+            try:
+                from outlook_manager import OutlookManager
+                OutlookManager().mark_as_read(entry_id)
+            except Exception:
+                pass
 
         summary = result.get("summary", "")
         mail_type = result.get("mail_type", "ACTION")
@@ -1826,6 +1963,144 @@ def close_analyze_modal(n):
     return False, True, 0, ""
 
 
+# ── AI 답장: 버튼 클릭 → 모달 열기 + 백그라운드 생성 시작 ─────────────────────
+@app.callback(
+    Output("ai-reply-modal", "is_open"),
+    Output("ai-reply-modal-title", "children"),
+    Output("ai-reply-loading-wrap", "style"),
+    Output("ai-reply-result-wrap", "style"),
+    Output("ai-reply-text", "value"),
+    Output("btn-ai-reply-open-outlook", "style"),
+    Output("store-ai-reply-entry-id", "data"),
+    Output("ai-reply-interval", "disabled"),
+    Input({"type": "btn-ai-reply-p3", "index": ALL}, "n_clicks"),
+    State("store-todos-p3", "data"),
+    State("p3-priority-filter", "value"),
+    State("p3-sort-combo", "value"),
+    State("store-api-key", "data"),
+    State("store-user-profile", "data"),
+    prevent_initial_call=True,
+)
+def start_ai_reply(n_clicks_list, todos_p3, priority_filter, sort_combo, api_key, user_profile):
+    global _ai_reply
+    triggered = ctx.triggered_id
+    if not triggered or not any(n for n in (n_clicks_list or []) if n):
+        return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
+
+    idx = triggered["index"]
+    filtered = _get_filtered_sorted(todos_p3 or [], priority_filter, sort_combo, ["active"])
+    if idx >= len(filtered):
+        return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
+
+    _, todo = filtered[idx]   # (원본_idx, todo_dict) 튜플
+    entry_id = todo.get("entry_id", "")
+    email_subject = todo.get("email_subject", "")
+    summary = todo.get("summary", "")
+    todo_text = todo.get("text", "")
+
+    _ai_reply["status"] = "running"
+    _ai_reply["text"] = ""
+    _ai_reply["entry_id"] = entry_id
+
+    user_context = build_user_context(user_profile) if user_profile else ""
+
+    def _run():
+        global _ai_reply
+        try:
+            from ai_processor import AIProcessor
+            processor = AIProcessor(override_api_key=api_key)
+            result = processor.generate_reply(
+                email_subject=email_subject,
+                summary=summary,
+                todo_text=todo_text,
+                user_profile=user_context,
+            )
+            _ai_reply["text"] = result
+            _ai_reply["status"] = "done"
+        except Exception as e:
+            _ai_reply["text"] = str(e)
+            _ai_reply["status"] = "error"
+
+    threading.Thread(target=_run, daemon=True).start()
+
+    return True, "AI 답장 생성 중…", {}, {"display": "none"}, "", {"display": "none"}, entry_id, False
+
+
+# ── AI 답장: 폴링 → 결과 표시 ─────────────────────────────────────────────────
+@app.callback(
+    Output("ai-reply-modal-title", "children", allow_duplicate=True),
+    Output("ai-reply-loading-wrap", "style", allow_duplicate=True),
+    Output("ai-reply-result-wrap", "style", allow_duplicate=True),
+    Output("ai-reply-text", "value", allow_duplicate=True),
+    Output("btn-ai-reply-open-outlook", "style", allow_duplicate=True),
+    Output("ai-reply-interval", "disabled", allow_duplicate=True),
+    Output("store-ai-reply-done", "data"),
+    Input("ai-reply-interval", "n_intervals"),
+    State("store-ai-reply-done", "data"),
+    prevent_initial_call=True,
+)
+def poll_ai_reply(n, done_count):
+    global _ai_reply
+    status = _ai_reply["status"]
+    if status == "running":
+        return no_update, no_update, no_update, no_update, no_update, no_update, no_update
+    if status == "done":
+        _ai_reply["status"] = "idle"
+        return (
+            "AI 답장 초안",
+            {"display": "none"},
+            {},
+            _ai_reply["text"],
+            {},           # 버튼 보이기
+            True,         # interval 중지
+            (done_count or 0) + 1,
+        )
+    if status == "error":
+        _ai_reply["status"] = "idle"
+        return (
+            "오류 발생",
+            {"display": "none"},
+            {},
+            f"답장 생성 중 오류가 발생했습니다:\n{_ai_reply['text']}",
+            {"display": "none"},
+            True,
+            (done_count or 0) + 1,
+        )
+    return no_update, no_update, no_update, no_update, no_update, no_update, no_update
+
+
+# ── AI 답장: Outlook에서 열기 ─────────────────────────────────────────────────
+@app.callback(
+    Output("p3-toast", "children", allow_duplicate=True),
+    Output("p3-toast", "is_open", allow_duplicate=True),
+    Output("p3-toast", "color", allow_duplicate=True),
+    Input("btn-ai-reply-open-outlook", "n_clicks"),
+    State("ai-reply-text", "value"),
+    State("store-ai-reply-entry-id", "data"),
+    prevent_initial_call=True,
+)
+def open_ai_reply_in_outlook(n, reply_body, entry_id):
+    if not n or not entry_id:
+        return no_update, no_update, no_update
+    try:
+        from outlook_manager import OutlookManager
+        OutlookManager().open_reply_with_body(entry_id, reply_body or "")
+        return "Outlook 답장 창이 열렸습니다.", True, "success"
+    except Exception as e:
+        return str(e), True, "danger"
+
+
+# ── AI 답장: 모달 닫기 ────────────────────────────────────────────────────────
+@app.callback(
+    Output("ai-reply-modal", "is_open", allow_duplicate=True),
+    Output("ai-reply-interval", "disabled", allow_duplicate=True),
+    Input("btn-ai-reply-close", "n_clicks"),
+    prevent_initial_call=True,
+)
+def close_ai_reply_modal(n):
+    return False, True
+
+
 # ── Navigation buttons ────────────────────────────────────────────────────────
 @app.callback(
     Output("store-page", "data", allow_duplicate=True),
@@ -1899,6 +2174,16 @@ def _render_todo_item_p3(todo, idx, list_type="active"):
                         color="link",
                         className="p-0 ms-2",
                         style={"fontSize": "var(--fs-xs)", "verticalAlign": "baseline"},
+                        disabled=not entry_id,
+                    ),
+                    dbc.Button(
+                        "AI 답장",
+                        id={"type": "btn-ai-reply-p3", "index": idx},
+                        size="sm",
+                        color="link",
+                        className="p-0 ms-2",
+                        style={"fontSize": "var(--fs-xs)", "verticalAlign": "baseline",
+                               "color": "#1565C0"},
                         disabled=not entry_id,
                     ),
                 ], className="d-flex align-items-center"),
@@ -2337,6 +2622,27 @@ def sync_todos_p3_to_cloud(todos, account, uid, id_token):
             fb_client.save_data(uid, id_token, "todos-p3", account.replace(".", "_"), {"todos": todos})
         except Exception as e:
             print(f"Todo P3 클라우드 동기화 에러: {e}")
+    return no_update
+
+
+# ── Cloud Sync: Seen-by-date ──────────────────────────────────────────────────
+@app.callback(
+    Output("store-notion-enabled", "data", allow_duplicate=True),  # dummy output
+    Input("store-seen-by-date", "data"),
+    State("store-account", "data"),
+    State("store-uid", "data"),
+    State("store-auth-token", "data"),
+    prevent_initial_call=True,
+)
+def sync_seen_by_date_to_cloud(seen_by_date, account, uid, id_token):
+    if account and uid and id_token and seen_by_date:
+        def _save():
+            try:
+                fb_client.save_data(uid, id_token, "seen-by-date",
+                                    account.replace(".", "_"), {"data": seen_by_date})
+            except Exception as e:
+                print(f"seen-by-date 클라우드 동기화 에러: {e}")
+        threading.Thread(target=_save, daemon=True).start()
     return no_update
 
 # ── Page 3: Edit modal ────────────────────────────────────────────────────────
